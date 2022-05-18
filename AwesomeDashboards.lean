@@ -78,7 +78,7 @@ inductive InstantVector : InstantVectorType → Type
   | time : InstantVector scalar
 
 def InstantVector.toString {t : InstantVectorType} : InstantVector t → String
-  | (selector lm offset) => s!"\{{String.join (lm.map $ λ l => l.key ++ "=" ++l.value ++ "")}}"
+  | (selector lm offset) => s!"\{{String.join (lm.map $ λ l => l.key ++ "=\"" ++ l.value ++ "\"")}}"
   | time => "time()"
   | (label_replace v dst replace src regex) => "label_replace()"
   | (range r) => s!"range({r.to_string})"
@@ -89,7 +89,7 @@ def InstantVector.toString {t : InstantVectorType} : InstantVector t → String
 structure GraphPanel where
   bottomY : Nat
   topY : Nat
-  promql : String
+  promql : InstantVector vector
   --data : InstantVector
 
 def evalGraph' (g : GraphPanel) (res : Nat) (endd : Nat) (steps : Nat) := ""
@@ -100,7 +100,7 @@ def graphData := "
 
 def graphToHTML (g : GraphPanel) := s!"
 <div>
-  <h3>GraphPanel: {g.promql}</h3>
+  <h3>GraphPanel: {g.promql.toString}</h3>
   <div style=\"height: 300px; width: 100%\">
     <canvas id=\"myChart\"></canvas>
   </div>

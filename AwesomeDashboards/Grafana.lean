@@ -71,13 +71,13 @@ def panelToGrafanaPanel (p : Panel) (h : Nat) : GrafanaPanel := match p with
   gridPos := {
     w := 12,
     h := 5,
-    x := h,
-    y := 0,
+    x := 0,
+    y := h,
   },
   context := "Hello world",
   datasource := myDatasource,
   targets := some [
-    { datasource := myDatasource, expr := "", refId := "A" }
+    { datasource := myDatasource, expr := g.promql.toString, refId := "A" }
   ]
 }
 | Panel.table t => {
@@ -88,8 +88,8 @@ def panelToGrafanaPanel (p : Panel) (h : Nat) : GrafanaPanel := match p with
       gridPos := {
         w := 12,
         h := 5,
-        x := h,
-        y := 0,
+        x := 0,
+        y := h,
       },
       targets := none,
     }
