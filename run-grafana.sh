@@ -1,0 +1,2 @@
+docker rm -f grafana
+docker run -d -v /home/fischerman/repo/lean-playground/grafana/datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml -v /home/fischerman/repo/lean-playground/grafana/source1.yaml:/etc/grafana/provisioning/dashboards/source1.yaml -v /home/fischerman/repo/lean-playground/grafana/dashboards/:/dashboards --name grafana --net host grafana/grafana
