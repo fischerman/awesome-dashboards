@@ -1,4 +1,4 @@
-import LeanPlayground
+import AwesomeDashboards
 import Lean.Data.Json
 
 structure GrafanaPanelGridPos where

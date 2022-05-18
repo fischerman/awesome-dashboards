@@ -2,7 +2,7 @@ import Lake
 import Init.System.IO
 open Lake DSL
 
-package «lean-playground» {
+package «awesome-dashboards» {
   -- add configuration options here
 }
 

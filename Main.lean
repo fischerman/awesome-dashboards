@@ -1,5 +1,5 @@
-import LeanPlayground
-import LeanPlayground.Grafana
+import AwesomeDashboards
+import AwesomeDashboards.Grafana
 import Lean.Data.Json
 
 def myDashboard : Dashboard := { name := "My Dashboard", panels := [
