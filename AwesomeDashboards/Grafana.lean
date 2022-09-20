@@ -1,5 +1,5 @@
-import AwesomeDashboards
 import Lean.Data.Json
+import AwesomeDashboards.Dashboard
 
 structure GrafanaPanelGridPos where
   x: Nat
@@ -64,20 +64,20 @@ def myGrafanaDashboard : GrafanaDashboard := {
     }
   ] }
 
-def panelToGrafanaPanel (p : Panel) (h : Nat) : GrafanaPanel := match p with
+def panelToGrafanaPanel {e : Exporter} (p : @Panel e) (h : Nat) : GrafanaPanel := match p with
 | Panel.graph g =>  { 
   type := "timeseries", 
   title := "",
   gridPos := {
     w := 12,
-    h := 5,
+    h := 10,
     x := 0,
     y := h,
   },
   context := "Hello world",
   datasource := myDatasource,
   targets := some [
-    { datasource := myDatasource, expr := g.promql.toString, refId := "A" }
+    { datasource := myDatasource, expr := g.promql.v.toString, refId := "A" }
   ]
 }
 | Panel.table t => {
@@ -87,18 +87,18 @@ def panelToGrafanaPanel (p : Panel) (h : Nat) : GrafanaPanel := match p with
       title := "", 
       gridPos := {
         w := 12,
-        h := 5,
+        h := 10,
         x := 0,
         y := h,
       },
       targets := none,
     }
 
-def panelsToGrafanaPanels (ps : List Panel) (h : Nat) : List GrafanaPanel := match ps with
-| (p :: ps) => panelToGrafanaPanel p h :: panelsToGrafanaPanels ps (h+5)
+def panelsToGrafanaPanels {e : Exporter} (ps : List $ @Panel e) (h : Nat) : List GrafanaPanel := match ps with
+| (p :: ps) => panelToGrafanaPanel p h :: panelsToGrafanaPanels ps (h+10)
 | [] => []
 
-def dashboardToGrafana (d : Dashboard) : GrafanaDashboard := {
+def dashboardToGrafana {e : Exporter} (d : @Dashboard e) : GrafanaDashboard := {
   id := none,
   uuid := "lBf76pX7k",
   title := d.name,
