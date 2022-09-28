@@ -77,6 +77,7 @@ def myGrafanaDashboard : GrafanaDashboard := {
 
 def metricUnitToGrafanaUnit (u : MetricUnit) : String := match u with
   | (MetricUnit.bytes) => "decbytes"
+  | (MetricUnit.div MetricUnit.bytes MetricUnit.seconds) => "Bps"
   | _ => "none"
 
 def panelToGrafanaPanel {e : Exporter} (p : @Panel e) (h : Nat) : GrafanaPanel := match p with
@@ -84,7 +85,7 @@ def panelToGrafanaPanel {e : Exporter} (p : @Panel e) (h : Nat) : GrafanaPanel :
   type := "timeseries", 
   title := "",
   gridPos := {
-    w := 12,
+    w := 24,
     h := 10,
     x := 0,
     y := h,
@@ -108,7 +109,7 @@ def panelToGrafanaPanel {e : Exporter} (p : @Panel e) (h : Nat) : GrafanaPanel :
       context := "Hello table", 
       title := "", 
       gridPos := {
-        w := 12,
+        w := 24,
         h := 10,
         x := 0,
         y := h,

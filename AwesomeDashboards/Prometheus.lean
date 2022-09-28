@@ -6,12 +6,15 @@ inductive MetricType
 | histogram
 | untyped
 
+-- https://prometheus.io/docs/practices/naming/#base-units
+@[matchPattern]
 inductive MetricUnit
 | seconds
 | bytes
 | bool
 | time
 | unitless
+| div (dividend devisor : MetricUnit)
 deriving Repr, BEq, DecidableEq
 
 structure Metric where
@@ -36,15 +39,41 @@ inductive VectorMatching
 
 inductive AggregationSelector 
 
+def name_label := "__name__"
+
 structure KeyValuePair where
 (key : String)
 (value : String)
 
+def KeyValuePair.toString (kvp : KeyValuePair) := kvp.key ++ "=\"" ++ kvp.value ++ "\""
+
+def joinSep (s : List String) (sep : String) : String := match s with
+| [] => ""
+| x::[] => x
+| x::xs => x ++ sep ++ (joinSep xs sep)
+
+structure LabelMatchers where
+  equal : List KeyValuePair
+
+def LabelMatchers.empty : LabelMatchers := {equal := []}
+
+def LabelMatchers.withEqualMatcher (m : LabelMatchers) (key : String) (value : String) := {
+  m with equal := {key := key, value:= value} :: m.equal
+}
+
+def LabelMatchers.withEqualMatchers' (m : LabelMatchers) (x : KeyValuePair) := {
+  m with equal := x :: m.equal
+}
+
+def LabelMatchers.withName (m : LabelMatchers) (value : String) := withEqualMatcher m name_label value
+
+def LabelMatchers.toString (m : LabelMatchers) := "{" ++ joinSep (m.equal.map KeyValuePair.toString) ", " ++ "}"
+
 inductive RangeVector
-| selector (literal_match : List KeyValuePair) (duration : Nat)
+| selector (lms : LabelMatchers) (duration : Nat)
 
 def RangeVector.to_string : RangeVector → String
-  | (selector lm d) => s!"\{{String.join (lm.map $ λ l => l.key ++ "=" ++l.value ++ "")}}[{d}]"
+  | (selector lms d) => s!"{lms.toString}[{d}s]"
 
 inductive InstantVectorType
 | scalar
@@ -52,11 +81,9 @@ inductive InstantVectorType
 
 open InstantVectorType
 
-def name_label := "__name__"
-
 -- TODO: maybe this has to be a type family to differentiate between a scalar and instant vector return type
 inductive InstantVector : InstantVectorType → Type
-  | selector (literal_match : List KeyValuePair) (offset : Nat) : InstantVector vector -- TODO: regex, negative, and proof for minimal label requirements
+  | selector (lms : LabelMatchers) (offset : Nat) : InstantVector vector -- TODO: regex, negative, and proof for minimal label requirements
   | literal (v : Float) : InstantVector InstantVectorType.scalar
   | sub_vector (vector_matching : Option VectorMatching) (a b : InstantVector vector) : InstantVector vector
   | add_scalar_left (a : InstantVector scalar) (b : InstantVector vector) : InstantVector vector
@@ -68,10 +95,10 @@ inductive InstantVector : InstantVectorType → Type
 
 def is_name := λ (l : KeyValuePair) => l.key == name_label
 
-def TypeSafeSelector (lm : List KeyValuePair) (e : Exporter) : Bool := 
+def TypeSafeSelector (lms : LabelMatchers) (e : Exporter) : Bool := 
   Option.isSome $ e.metrics.find? (λ m =>
     -- (List.all (lm.filter $ not ∘ is_name) (λ l => m.labels.contains l.key ))
-    (List.all (lm.filter $ is_name) (λ l => m.name = l.value ))
+    (List.all (lms.equal.filter $ is_name) (λ l => m.name = l.value ))
   )
 
 def InstantVector.typesafe {t : InstantVectorType} (v : InstantVector t) (e : Exporter) : Bool := match v with
@@ -79,16 +106,12 @@ def InstantVector.typesafe {t : InstantVectorType} (v : InstantVector t) (e : Ex
   | (InstantVector.sub_vector _ a b) => typesafe a e && typesafe b e
   | _ => true
 
-def InstantVector.withLiteralMatch {t : InstantVectorType} (key: String) (value: String) : InstantVector t → InstantVector t
-  | (InstantVector.selector lm offset) => InstantVector.selector (lm++[{key:=key, value:=value}]) offset
-  | x => x
-
 structure TypesafeInstantVector (t : InstantVectorType) (e : Exporter) where
 v : InstantVector t
 h : InstantVector.typesafe v e := by simp
 
 def InstantVector.toString {t : InstantVectorType} : InstantVector t → String
-  | (selector lm offset) => (String.join $ List.map (λ l => l.value) (lm.filter (λ l => l.key == name_label))) ++ "{" ++ String.join (List.map (λ l => l.key ++ "=\"" ++ l.value ++ "\"") (lm.filter λ l => l.key != name_label)) ++ "}"
+  | (selector lms offset) => (String.join $ List.map (λ l => l.value) (lms.equal.filter (λ l => l.key == name_label))) ++ "{" ++ joinSep (List.map KeyValuePair.toString (lms.equal.filter λ l => l.key != name_label)) ", " ++ "}"
   | time => "time()"
   | (label_replace v dst replace src regex) => "label_replace()"
   | (rate r) => s!"rate({r.to_string})"
@@ -101,33 +124,35 @@ instance {t : InstantVectorType} : ToString $ InstantVector t where
 instance {t : InstantVectorType} : Repr $ InstantVector t where
   reprPrec v _ := InstantVector.toString v
 
-#eval InstantVector.rate (RangeVector.selector [{key := "instance", value := "test"}] 5)
+#eval InstantVector.rate (RangeVector.selector (LabelMatchers.empty.withEqualMatcher "instance" "test") 5)
 
 def Option.get : (a : Option α) → a.isSome → α
   | some a, _ => a
 
-def getNameLm? (lm : List KeyValuePair) : Option String :=
-  let name? := lm.find? (λl => is_name l)
+def getNameLm? (lms : LabelMatchers) : Option String :=
+  let name? := lms.equal.find? (λl => is_name l)
   match name? with
     | (Option.some name) => name.value
     | (Option.none) => Option.none
 
-def InstantVector.getName? {lm} {offset} (v : InstantVector vector) (h : v = InstantVector.selector lm offset) : Option String := 
-  getNameLm? lm
-
-def getMetricDef? (e : Exporter) (lm : List KeyValuePair) : Option Metric := match getNameLm? lm with
+def getMetricDef? (e : Exporter) (lms : LabelMatchers) : Option Metric := match getNameLm? lms with
   | (Option.some name) => e.metrics.find? (λm => m.name = name)
   | (Option.none) => Option.none
 
+def RangeVector.unitOf (e : Exporter) : RangeVector → Option MetricUnit
+  | (selector lms d) => match getMetricDef? e lms with
+    | (Option.some metric) => metric.unit
+    | _ => Option.none
+
 def unitOf {t : InstantVectorType} (e : Exporter) : InstantVector t → Option MetricUnit
   | (InstantVector.time) => MetricUnit.time
-  | (InstantVector.selector lm offset) => match getMetricDef? e lm with
+  | (InstantVector.selector lms offset) => match getMetricDef? e lms with
     | (Option.some metric) => metric.unit
     | _ => Option.none
   | (InstantVector.label_replace v _ _ _ _) => unitOf e v
   | (InstantVector.sub_vector _ a b) => if (unitOf e a) = (unitOf e b) then unitOf e a else Option.none
   | (InstantVector.add_scalar_left  s v) => unitOf e v -- adding a scalar doesn't change the unit (however, it might no longer make sense)
-  | (InstantVector.rate r) => MetricUnit.seconds -- we need to implement unitOf for range vectors and allow units to be rates
+  | (InstantVector.rate r) => (r.unitOf e).map $ λx => MetricUnit.div x (MetricUnit.seconds)
   | (InstantVector.literal f) => MetricUnit.unitless -- alternatively we could implement this function only vectors
 
 open Lean
@@ -147,7 +172,7 @@ def name : Parser := withAntiquot (mkAntiquot "name" `LX.text) {
 declare_syntax_cat labelmatcher_aux
 syntax name "=" strLit : labelmatcher_aux
 macro_rules
-| `(labelmatcher_aux| $key:name=$value) => `(InstantVector.selector [{key := $(quote key[0].getAtomVal!), value:= $value}] 0)
+| `(labelmatcher_aux| $key:name=$value) => `({key := $(quote key[0].getAtomVal!), value:= $value})
 
 -- 
 declare_syntax_cat labelmatcher
@@ -158,20 +183,28 @@ syntax labelmatcher : term
 
 -- How to translate label matchers into Lean terms
 macro_rules
-| `(labelmatcher| {}) => `(InstantVector.selector (@List.nil KeyValuePair) 0)
-| `(labelmatcher| { $x }) => `($x)
+| `(labelmatcher| {}) => `(LabelMatchers.empty)
+| `(labelmatcher| { $x }) => `(LabelMatchers.empty.withEqualMatchers' $x)
 --| `(labelmatcher| { $x, $xs,* }) => `({$xs,*})
+
+declare_syntax_cat rangevector
+syntax name (labelmatcher) "[" numLit "]" : rangevector
+
+macro_rules
+| `(rangevector| $name:name $xs [ $range ] ) => `(RangeVector.selector ($(xs).withName $(quote name[0].getAtomVal!)) $range)
 
 declare_syntax_cat instantvector
 syntax name (labelmatcher)? : instantvector
 syntax "time()" : instantvector
+syntax "rate(" rangevector ")" : instantvector
 syntax instantvector " - " instantvector : instantvector
 
 macro_rules
 | `(instantvector| time()) => `(InstantVector.time)
-| `(instantvector| $name:name) => `(InstantVector.selector [{key := "__name__", value:= $(quote name[0].getAtomVal!)}] 0)
-| `(instantvector| $name:name $xs) => `(InstantVector.withLiteralMatch "__name__" $(quote name[0].getAtomVal!)  $xs)
+| `(instantvector| $name:name) => `(InstantVector.selector (LabelMatchers.empty.withName $(quote name[0].getAtomVal!)) 0)
+| `(instantvector| $name:name $xs) => `(InstantVector.selector ($(xs).withName $(quote name[0].getAtomVal!)) 0)
 | `(instantvector| $a-$b) => `(InstantVector.sub_vector Option.none $a $b)
+| `(instantvector| rate($rv)) => `(InstantVector.rate $rv)
 
 syntax "[pql|" instantvector "]" : term
 
@@ -180,13 +213,13 @@ macro_rules
 
 
 
-#eval InstantVector.selector ([{key := "__name__", value:= "f"}]++[{key := "$x", value := ""}]) 0
 set_option pp.rawOnError true
 #eval [pql| up{}]
 #eval [pql| up{instance="localhost"}]
 #eval [pql| up - up]
 -- #eval [pql| up{test="abc", lan="def"}]
 #eval [pql| time()]
+#eval [pql| rate(up{}[7])]
 
 
 #eval s!"f"

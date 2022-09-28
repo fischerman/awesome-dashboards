@@ -5,8 +5,6 @@ import AwesomeDashboards.Prometheus
 open InstantVectorType
 
 structure GraphPanel {e : Exporter} where
-  bottomY : Nat
-  topY : Nat
   promql : TypesafeInstantVector vector e
   --data : InstantVector
 
