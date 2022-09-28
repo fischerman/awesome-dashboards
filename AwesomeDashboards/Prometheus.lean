@@ -58,7 +58,7 @@ def name_label := "__name__"
 inductive InstantVector : InstantVectorType → Type
   | selector (literal_match : List KeyValuePair) (offset : Nat) : InstantVector vector -- TODO: regex, negative, and proof for minimal label requirements
   | literal (v : Float) : InstantVector InstantVectorType.scalar
-  | sub_vector (vector_matching : Option VectorMatching) (a b : InstantVector vector) : InstantVector scalar
+  | sub_vector (vector_matching : Option VectorMatching) (a b : InstantVector vector) : InstantVector vector
   | add_scalar_left (a : InstantVector scalar) (b : InstantVector vector) : InstantVector vector
   | sum (a : AggregationSelector) (v : InstantVector vector) : InstantVector vector
   | topk (a : AggregationSelector) (k : Nat) (v : InstantVector vector) : InstantVector vector
@@ -92,6 +92,7 @@ def InstantVector.toString {t : InstantVectorType} : InstantVector t → String
   | time => "time()"
   | (label_replace v dst replace src regex) => "label_replace()"
   | (rate r) => s!"rate({r.to_string})"
+  | (sub_vector vm a b) => s!"{a.toString} - {b.toString}"
   | _ => ""
 
 instance {t : InstantVectorType} : ToString $ InstantVector t where
@@ -101,8 +102,6 @@ instance {t : InstantVectorType} : Repr $ InstantVector t where
   reprPrec v _ := InstantVector.toString v
 
 #eval InstantVector.rate (RangeVector.selector [{key := "instance", value := "test"}] 5)
-
-def Exporter.unitOf (e : Exporter) (name : string) : Option MetricUnit := sorry
 
 def Option.get : (a : Option α) → a.isSome → α
   | some a, _ => a
@@ -163,19 +162,29 @@ macro_rules
 | `(labelmatcher| { $x }) => `($x)
 --| `(labelmatcher| { $x, $xs,* }) => `({$xs,*})
 
-syntax "[pql|" name (labelmatcher)? "]" : term
-syntax "[pql|" "time()" "]" : term
+declare_syntax_cat instantvector
+syntax name (labelmatcher)? : instantvector
+syntax "time()" : instantvector
+syntax instantvector " - " instantvector : instantvector
 
-set_option trace.Elab.definition true in
 macro_rules
-| `([pql| time()]) => `(InstantVector.time)
-| `([pql| $name]) => `(InstantVector.selector [{key := "__name__", value:= $(quote name[0].getAtomVal!)}] 0)
-| `([pql| $name $xs]) => `(InstantVector.withLiteralMatch "__name__" $(quote name[0].getAtomVal!)  $xs)
+| `(instantvector| time()) => `(InstantVector.time)
+| `(instantvector| $name:name) => `(InstantVector.selector [{key := "__name__", value:= $(quote name[0].getAtomVal!)}] 0)
+| `(instantvector| $name:name $xs) => `(InstantVector.withLiteralMatch "__name__" $(quote name[0].getAtomVal!)  $xs)
+| `(instantvector| $a-$b) => `(InstantVector.sub_vector Option.none $a $b)
+
+syntax "[pql|" instantvector "]" : term
+
+macro_rules
+| `([pql| $v:instantvector]) => `($v)
+
+
 
 #eval InstantVector.selector ([{key := "__name__", value:= "f"}]++[{key := "$x", value := ""}]) 0
 set_option pp.rawOnError true
 #eval [pql| up{}]
 #eval [pql| up{instance="localhost"}]
+#eval [pql| up - up]
 -- #eval [pql| up{test="abc", lan="def"}]
 #eval [pql| time()]
 

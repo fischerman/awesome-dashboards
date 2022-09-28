@@ -27,5 +27,5 @@ def v := InstantVector.selector lm 0
 
 example : InstantVector.typesafe (InstantVector.selector [{key := "__name__", value := "node_filesystem_avail_bytes"}] 0) node_exporter := by simp
 
-def avail_bytes : InstantVector InstantVectorType.vector := [pql| node_filesystem_avail_bytes{}]
+def avail_bytes : InstantVector InstantVectorType.vector := [pql| node_filesystem_avail_bytes-node_filesystem_avail_bytes]
 #eval unitOf node_exporter avail_bytes

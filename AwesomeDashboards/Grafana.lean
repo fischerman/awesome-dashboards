@@ -17,7 +17,15 @@ structure GrafanaPanelTarget where
   datasource: GrafanaPanelDatasource
   expr: String
   refId: String
-  deriving Lean.FromJson, Lean.ToJson
+deriving Lean.FromJson, Lean.ToJson
+
+structure FieldConfigDefaults where
+  unit: String
+deriving Lean.FromJson, Lean.ToJson
+
+structure FieldConfig where
+  defaults: FieldConfigDefaults
+deriving Lean.FromJson, Lean.ToJson
 
 structure GrafanaPanel where
   type: String
@@ -25,6 +33,7 @@ structure GrafanaPanel where
   gridPos: GrafanaPanelGridPos
   context: String
   datasource: GrafanaPanelDatasource
+  fieldConfig: FieldConfig
   targets: Option $ List GrafanaPanelTarget
   deriving Lean.FromJson, Lean.ToJson
 
@@ -49,6 +58,7 @@ def myGrafanaDashboard : GrafanaDashboard := {
       title := "", 
       gridPos := { x := 0, y := 0, w := 12, h := 5 },
       targets := none,
+      fieldConfig := { defaults := { unit := "none" }}
     },
     {
       type := "timeseries", 
@@ -60,9 +70,14 @@ def myGrafanaDashboard : GrafanaDashboard := {
         datasource := myDatasource
         expr := "up{}",
         refId := "A",
-      }]
+      }],
+      fieldConfig := { defaults := { unit := "none" }}
     }
   ] }
+
+def metricUnitToGrafanaUnit (u : MetricUnit) : String := match u with
+  | (MetricUnit.bytes) => "decbytes"
+  | _ => "none"
 
 def panelToGrafanaPanel {e : Exporter} (p : @Panel e) (h : Nat) : GrafanaPanel := match p with
 | Panel.graph g =>  { 
@@ -78,7 +93,14 @@ def panelToGrafanaPanel {e : Exporter} (p : @Panel e) (h : Nat) : GrafanaPanel :
   datasource := myDatasource,
   targets := some [
     { datasource := myDatasource, expr := g.promql.v.toString, refId := "A" }
-  ]
+  ],
+  fieldConfig := {
+    defaults := {
+      unit := match unitOf e g.promql.v with
+        | (some m) => metricUnitToGrafanaUnit m
+        | _ => "none"
+    }
+  }
 }
 | Panel.table t => {
       type := "text", 
@@ -92,6 +114,11 @@ def panelToGrafanaPanel {e : Exporter} (p : @Panel e) (h : Nat) : GrafanaPanel :
         y := h,
       },
       targets := none,
+      fieldConfig := {
+    defaults := {
+      unit := "none"
+    }
+  }
     }
 
 def panelsToGrafanaPanels {e : Exporter} (ps : List $ @Panel e) (h : Nat) : List GrafanaPanel := match ps with
