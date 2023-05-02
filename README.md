@@ -11,3 +11,4 @@ lake build && ./build/bin/awesome-dashboards > grafana/dashboards/dashboard.json
 ## References
 
 - https://github.com/grafana/dashboard-spec/tree/master/specs/7.0
+- https://github.com/OpenObservability/OpenMetrics/blob/main/specification/OpenMetrics.md
