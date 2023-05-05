@@ -43,6 +43,7 @@ example : InstantVector.typesafe (InstantVector.selector {equal := lm} 0) node_e
 
 def avail_bytes : InstantVector InstantVectorType.vector := [pql| node_filesystem_avail_bytes-node_filesystem_avail_bytes]
 #eval unitOf node_exporter avail_bytes
+#eval unitOf node_exporter [pql| time()]
 #eval RangeVector.unitOf node_exporter $ RangeVector.selector (LabelMatchers.empty.withName "node_network_receive_bytes_total") 5
 #eval unitOf node_exporter [pql| rate(node_network_receive_bytes_total{}[5])]
 #eval [pql| rate(node_network_receive_bytes_total{device="vda"}[120])]

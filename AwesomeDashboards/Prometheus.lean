@@ -33,6 +33,13 @@ def up : Metric := {
 structure Exporter where
 metrics : List Metric
 
+structure ScrapeConfig where
+targetLabels : List String
+exporter : Exporter
+
+structure Environment where
+scrapeConfigs: List ScrapeConfig
+
 inductive VectorMatching
 | ignoring
 | on
@@ -81,7 +88,6 @@ inductive InstantVectorType
 
 open InstantVectorType
 
--- TODO: maybe this has to be a type family to differentiate between a scalar and instant vector return type
 inductive InstantVector : InstantVectorType → Type
   | selector (lms : LabelMatchers) (offset : Nat) : InstantVector vector -- TODO: regex, negative, and proof for minimal label requirements
   | literal (v : Float) : InstantVector InstantVectorType.scalar
@@ -97,7 +103,7 @@ def is_name := λ (l : KeyValuePair) => l.key == name_label
 
 def TypeSafeSelector (lms : LabelMatchers) (e : Exporter) : Bool := 
   Option.isSome $ e.metrics.find? (λ m =>
-    -- (List.all (lm.filter $ not ∘ is_name) (λ l => m.labels.contains l.key ))
+    (List.all (lms.equal.filter $ not ∘ is_name) (λ l => m.labels.contains l.key )) &&
     (List.all (lms.equal.filter $ is_name) (λ l => m.name = l.value ))
   )
 
@@ -145,15 +151,15 @@ def RangeVector.unitOf (e : Exporter) : RangeVector → Option MetricUnit
     | _ => Option.none
 
 def unitOf {t : InstantVectorType} (e : Exporter) : InstantVector t → Option MetricUnit
-  | (InstantVector.time) => MetricUnit.time
-  | (InstantVector.selector lms offset) => match getMetricDef? e lms with
+  | (.time) => MetricUnit.time
+  | (.selector lms offset) => match getMetricDef? e lms with
     | (Option.some metric) => metric.unit
     | _ => Option.none
-  | (InstantVector.label_replace v _ _ _ _) => unitOf e v
-  | (InstantVector.sub_vector _ a b) => if (unitOf e a) = (unitOf e b) then unitOf e a else Option.none
-  | (InstantVector.add_scalar_left  s v) => unitOf e v -- adding a scalar doesn't change the unit (however, it might no longer make sense)
-  | (InstantVector.rate r) => (r.unitOf e).map $ λx => MetricUnit.div x (MetricUnit.seconds)
-  | (InstantVector.literal f) => MetricUnit.unitless -- alternatively we could implement this function only vectors
+  | (.label_replace v _ _ _ _) => unitOf e v
+  | (.sub_vector _ a b) => if (unitOf e a) = (unitOf e b) then unitOf e a else Option.none
+  | (.add_scalar_left  s v) => unitOf e v -- adding a scalar doesn't change the unit (however, it might no longer make sense)
+  | (.rate r) => (r.unitOf e).map $ λx => MetricUnit.div x (MetricUnit.seconds)
+  | (.literal f) => MetricUnit.unitless -- alternatively we could implement this function only vectors
 
 open Lean
 open Lean.Parser
