@@ -8,7 +8,7 @@ def myPrometheusEnv : Environment := {
 }
 
 def myDashboard : Dashboard node_exporter := { name := "My Dashboard", panels := [
-    (Panel.graph { promql := { v := [pql| node_filesystem_avail_bytes{fstype="f"}] } }),
+    (Panel.graph { promql := { v := [pql| node_filesystem_avail_bytes{fstype="f"} ] } }),
     (Panel.graph { promql := { v := [pql| process_cpu_seconds_total] } }),
     (Panel.graph { promql := { v := [pql| rate(node_network_receive_bytes_total{device="eth0"}[120])] } })
   ] }

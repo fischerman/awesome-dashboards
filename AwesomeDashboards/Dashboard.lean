@@ -1,5 +1,4 @@
 import Init.Data
-import Std.Data
 import AwesomeDashboards.Prometheus
 
 open InstantVectorType

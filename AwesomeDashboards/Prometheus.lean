@@ -7,7 +7,7 @@ inductive MetricType
 | untyped
 
 -- https://prometheus.io/docs/practices/naming/#base-units
-@[matchPattern]
+@[match_pattern]
 inductive MetricUnit
 | seconds
 | bytes
@@ -101,14 +101,14 @@ inductive InstantVector : InstantVectorType → Type
 
 def is_name := λ (l : KeyValuePair) => l.key == name_label
 
-def TypeSafeSelector (lms : LabelMatchers) (e : Exporter) : Bool := 
+def typeSafeSelector (lms : LabelMatchers) (e : Exporter) : Bool := 
   Option.isSome $ e.metrics.find? (λ m =>
     (List.all (lms.equal.filter $ not ∘ is_name) (λ l => m.labels.contains l.key )) &&
     (List.all (lms.equal.filter $ is_name) (λ l => m.name = l.value ))
   )
 
 def InstantVector.typesafe {t : InstantVectorType} (v : InstantVector t) (e : Exporter) : Bool := match v with
-  | (InstantVector.selector lm offset) => TypeSafeSelector lm e
+  | (InstantVector.selector lm offset) => typeSafeSelector lm e
   | (InstantVector.sub_vector _ a b) => typesafe a e && typesafe b e
   | _ => true
 
@@ -172,13 +172,14 @@ def name : Parser := withAntiquot (mkAntiquot "name" `LX.text) {
     mkNodeToken `LX.text startPos c s
 }
 
-@[combinatorFormatter name] def name.formatter : Formatter := pure ()
-@[combinatorParenthesizer name] def name.parenthesizer : Parenthesizer := pure ()
+@[combinator_formatter name] def name.formatter : Formatter := pure ()
+@[combinator_parenthesizer name] def name.parenthesizer : Parenthesizer := pure ()
 
 declare_syntax_cat labelmatcher_aux
 syntax name "=" strLit : labelmatcher_aux
 macro_rules
-| `(labelmatcher_aux| $key:name=$value) => `({key := $(quote key[0].getAtomVal!), value:= $value})
+| `(labelmatcher_aux| $key:name=$value) => `({key := $(quote key.raw[0].getAtomVal), value:= $value})
+syntax labelmatcher_aux : term
 
 -- 
 declare_syntax_cat labelmatcher
@@ -186,6 +187,10 @@ declare_syntax_cat labelmatcher
 syntax "{" labelmatcher_aux,* "}" : labelmatcher
 -- Make label matcher a valid term (not really neccessary)
 syntax labelmatcher : term
+
+-- See https://github.com/leanprover/lean4/pull/1251/commits/9eff6572334a40f671928400614309455c76ef38#diff-52ef0c67eea613acf6c0b6284063fd7112cdd40750de38365c214abaef246db4R1854
+-- TODO: Remove this workaround
+open TSyntax.Compat
 
 -- How to translate label matchers into Lean terms
 macro_rules
@@ -197,7 +202,7 @@ declare_syntax_cat rangevector
 syntax name (labelmatcher) "[" numLit "]" : rangevector
 
 macro_rules
-| `(rangevector| $name:name $xs [ $range ] ) => `(RangeVector.selector ($(xs).withName $(quote name[0].getAtomVal!)) $range)
+| `(rangevector| $name:name $xs [ $range ] ) => `(RangeVector.selector ($(xs).withName $(quote name.raw[0].getAtomVal)) $range)
 
 declare_syntax_cat instantvector
 syntax name (labelmatcher)? : instantvector
@@ -207,8 +212,8 @@ syntax instantvector " - " instantvector : instantvector
 
 macro_rules
 | `(instantvector| time()) => `(InstantVector.time)
-| `(instantvector| $name:name) => `(InstantVector.selector (LabelMatchers.empty.withName $(quote name[0].getAtomVal!)) 0)
-| `(instantvector| $name:name $xs) => `(InstantVector.selector ($(xs).withName $(quote name[0].getAtomVal!)) 0)
+| `(instantvector| $name:name) => `(InstantVector.selector (LabelMatchers.empty.withName $(quote name.raw[0].getAtomVal)) 0)
+| `(instantvector| $name:name $xs) => `(InstantVector.selector ($(xs).withName $(quote name.raw[0].getAtomVal)) 0)
 | `(instantvector| $a-$b) => `(InstantVector.sub_vector Option.none $a $b)
 | `(instantvector| rate($rv)) => `(InstantVector.rate $rv)
 
@@ -231,9 +236,3 @@ set_option pp.rawOnError true
 #eval s!"f"
 
 -- syntax:max can be used to change precendense
-
-syntax "`[abc| " name "]" : term
-macro_rules
-| `(`[abc| $x ]) => pure $ quote ("<" ++ x[0].getAtomVal! ++ "/>")
-
-#check `[abc| def]
