@@ -33,9 +33,19 @@ def up : Metric := {
 structure Exporter where
 metrics : List Metric
 
+-- The resulting labels of the scrape is a combination of target labels and metric labels. 
+-- Prometheus has a config "honor_labels" which deals with conflict.
+-- We do not implement this faithful.
 structure ScrapeConfig where
 targetLabels : List String
 exporter : Exporter
+
+namespace ScrapeConfig
+
+  def labels (s : ScrapeConfig) (name: String) : Option $ List String := 
+    Option.map (fun v => s.targetLabels ++ v.labels ++ ["job", "instace"]) (s.exporter.metrics.find? (fun m => m.name == name))
+
+end ScrapeConfig
 
 structure Environment where
 scrapeConfigs: List ScrapeConfig
@@ -62,19 +72,25 @@ def joinSep (s : List String) (sep : String) : String := match s with
 structure LabelMatchers where
   equal : List KeyValuePair
 
-def LabelMatchers.empty : LabelMatchers := {equal := []}
+namespace LabelMatchers
 
-def LabelMatchers.withEqualMatcher (m : LabelMatchers) (key : String) (value : String) := {
-  m with equal := {key := key, value:= value} :: m.equal
-}
+  def empty : LabelMatchers := {equal := []}
 
-def LabelMatchers.withEqualMatchers' (m : LabelMatchers) (x : KeyValuePair) := {
-  m with equal := x :: m.equal
-}
+  def withEqualMatcher (m : LabelMatchers) (key : String) (value : String) := {
+    m with equal := {key := key, value:= value} :: m.equal
+  }
 
-def LabelMatchers.withName (m : LabelMatchers) (value : String) := withEqualMatcher m name_label value
+  def withEqualMatchers' (m : LabelMatchers) (x : KeyValuePair) := {
+    m with equal := x :: m.equal
+  }
 
-def LabelMatchers.toString (m : LabelMatchers) := "{" ++ joinSep (m.equal.map KeyValuePair.toString) ", " ++ "}"
+  def withName (m : LabelMatchers) (value : String) := withEqualMatcher m name_label value
+
+  def toString (m : LabelMatchers) := "{" ++ joinSep (m.equal.map KeyValuePair.toString) ", " ++ "}"
+
+  def getMatchedName (m : LabelMatchers) : Option String := Option.map (fun e => e.value) (m.equal.find? fun e => e.key == name_label)
+
+end LabelMatchers
 
 inductive RangeVector
 | selector (lms : LabelMatchers) (duration : Nat)
@@ -101,18 +117,24 @@ inductive InstantVector : InstantVectorType → Type
 
 def is_name := λ (l : KeyValuePair) => l.key == name_label
 
-def typeSafeSelector (lms : LabelMatchers) (e : Exporter) : Bool := 
-  Option.isSome $ e.metrics.find? (λ m =>
-    (List.all (lms.equal.filter $ not ∘ is_name) (λ l => m.labels.contains l.key )) &&
-    (List.all (lms.equal.filter $ is_name) (λ l => m.name = l.value ))
-  )
+-- A label matcher is safe when
+-- - every label that is used exists in combination with all other labels
 
-def InstantVector.typesafe {t : InstantVectorType} (v : InstantVector t) (e : Exporter) : Bool := match v with
+-- - currently requires that there is an equlity matcher on the name
+-- - matches on the any occurence of the metric name in the scrape config. Only one must fit. TODO: Check that all definitions are working.
+def typeSafeSelector (lms : LabelMatchers) (e : Environment) : Bool := match lms.getMatchedName with
+| (.some v) => Option.isSome $ e.scrapeConfigs.find? (fun c => Option.isSome $ c.exporter.metrics.find? (λ m =>
+    v == m.name &&
+    (List.all (lms.equal.filter $ not ∘ is_name) (λ l => (m.labels ++ c.targetLabels ++ ["job", "instace"]).contains l.key ))
+  ))
+| .none => false
+
+def InstantVector.typesafe {t : InstantVectorType} (v : InstantVector t) (e : Environment) : Bool := match v with
   | (InstantVector.selector lm offset) => typeSafeSelector lm e
   | (InstantVector.sub_vector _ a b) => typesafe a e && typesafe b e
   | _ => true
 
-structure TypesafeInstantVector (t : InstantVectorType) (e : Exporter) where
+structure TypesafeInstantVector (t : InstantVectorType) (e : Environment) where
 v : InstantVector t
 h : InstantVector.typesafe v e := by simp
 
@@ -141,16 +163,16 @@ def getNameLm? (lms : LabelMatchers) : Option String :=
     | (Option.some name) => name.value
     | (Option.none) => Option.none
 
-def getMetricDef? (e : Exporter) (lms : LabelMatchers) : Option Metric := match getNameLm? lms with
-  | (Option.some name) => e.metrics.find? (λm => m.name = name)
+def getMetricDef? (e : Environment) (lms : LabelMatchers) : Option Metric := match getNameLm? lms with
+  | (Option.some name) => (e.scrapeConfigs.findSome? (fun c => c.exporter.metrics.find? (λm => m.name = name)))
   | (Option.none) => Option.none
 
-def RangeVector.unitOf (e : Exporter) : RangeVector → Option MetricUnit
+def RangeVector.unitOf (e : Environment) : RangeVector → Option MetricUnit
   | (selector lms d) => match getMetricDef? e lms with
     | (Option.some metric) => metric.unit
     | _ => Option.none
 
-def unitOf {t : InstantVectorType} (e : Exporter) : InstantVector t → Option MetricUnit
+def unitOf {t : InstantVectorType} (e : Environment) : InstantVector t → Option MetricUnit
   | (.time) => MetricUnit.time
   | (.selector lms offset) => match getMetricDef? e lms with
     | (Option.some metric) => metric.unit
@@ -196,7 +218,7 @@ open TSyntax.Compat
 macro_rules
 | `(labelmatcher| {}) => `(LabelMatchers.empty)
 | `(labelmatcher| { $x }) => `(LabelMatchers.empty.withEqualMatchers' $x)
---| `(labelmatcher| { $x, $xs,* }) => `({$xs,*})
+-- | `(labelmatcher| { $xs,* }) => `($(Array.map (fun x => x) xs))
 
 declare_syntax_cat rangevector
 syntax name (labelmatcher) "[" numLit "]" : rangevector

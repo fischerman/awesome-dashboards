@@ -35,15 +35,22 @@ def node_exporter : Exporter := {
 def lm : List KeyValuePair := [{key := "__name__", value := "node_filesystem_avail_bytes"}]
 def v := InstantVector.selector {equal := lm} 0
 
-#eval InstantVector.typesafe v node_exporter
+namespace x
+def myPrometheusEnv : Environment := {
+  scrapeConfigs := [{ targetLabels := ["job", "instance"], exporter := node_exporter }]
+}
+
+#eval InstantVector.typesafe v myPrometheusEnv
 #eval List.map (λ l => l.key) (lm.filter $ is_name)
 #eval List.all (lm.filter $ is_name) (λ l => "node_filesystem_avail_bytes" = l.key )
 
-example : InstantVector.typesafe (InstantVector.selector {equal := lm} 0) node_exporter := by simp
+example : InstantVector.typesafe (InstantVector.selector {equal := lm} 0) myPrometheusEnv := by simp
 
 def avail_bytes : InstantVector InstantVectorType.vector := [pql| node_filesystem_avail_bytes-node_filesystem_avail_bytes]
-#eval unitOf node_exporter avail_bytes
-#eval unitOf node_exporter [pql| time()]
-#eval RangeVector.unitOf node_exporter $ RangeVector.selector (LabelMatchers.empty.withName "node_network_receive_bytes_total") 5
-#eval unitOf node_exporter [pql| rate(node_network_receive_bytes_total{}[5])]
+#eval unitOf myPrometheusEnv avail_bytes
+#eval unitOf myPrometheusEnv [pql| time()]
+#eval RangeVector.unitOf myPrometheusEnv $ RangeVector.selector (LabelMatchers.empty.withName "node_network_receive_bytes_total") 5
+#eval unitOf myPrometheusEnv [pql| rate(node_network_receive_bytes_total{}[5])]
 #eval [pql| rate(node_network_receive_bytes_total{device="vda"}[120])]
+
+end x

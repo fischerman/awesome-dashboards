@@ -80,7 +80,7 @@ def metricUnitToGrafanaUnit (u : MetricUnit) : String := match u with
   | (MetricUnit.div MetricUnit.bytes MetricUnit.seconds) => "Bps"
   | _ => "none"
 
-def panelToGrafanaPanel {e : Exporter} (p : @Panel e) (h : Nat) : GrafanaPanel := match p with
+def panelToGrafanaPanel {e : Environment} (p : @Panel e) (h : Nat) : GrafanaPanel := match p with
 | Panel.graph g =>  { 
   type := "timeseries", 
   title := "",
@@ -122,11 +122,11 @@ def panelToGrafanaPanel {e : Exporter} (p : @Panel e) (h : Nat) : GrafanaPanel :
   }
     }
 
-def panelsToGrafanaPanels {e : Exporter} (ps : List $ @Panel e) (h : Nat) : List GrafanaPanel := match ps with
+def panelsToGrafanaPanels {e : Environment} (ps : List $ @Panel e) (h : Nat) : List GrafanaPanel := match ps with
 | (p :: ps) => panelToGrafanaPanel p h :: panelsToGrafanaPanels ps (h+10)
 | [] => []
 
-def dashboardToGrafana {e : Exporter} (d : @Dashboard e) : GrafanaDashboard := {
+def dashboardToGrafana {e : Environment} (d : @Dashboard e) : GrafanaDashboard := {
   id := none,
   uuid := "lBf76pX7k",
   title := d.name,

@@ -3,17 +3,17 @@ import AwesomeDashboards.Prometheus
 
 open InstantVectorType
 
-structure GraphPanel {e : Exporter} where
+structure GraphPanel {e : Environment} where
   promql : TypesafeInstantVector vector e
   --data : InstantVector
 
-def evalGraph' {e : Exporter} (g : @GraphPanel e) (res : Nat) (endd : Nat) (steps : Nat) := ""
+def evalGraph' {e : Environment} (g : @GraphPanel e) (res : Nat) (endd : Nat) (steps : Nat) := ""
 
 def graphData := "
 
 "
 
-def graphToHTML {e : Exporter} (g : @GraphPanel e) := s!"
+def graphToHTML {e : Environment} (g : @GraphPanel e) := s!"
 <div>
   <h3>GraphPanel: {g.promql.v.toString}</h3>
   <div style=\"height: 300px; width: 100%\">
@@ -59,10 +59,10 @@ def prometheusQueryInstant (v : InstantVector vector) : IO (List InstantValue) :
 
 -- def TablePanel.columnsToRows (t : TablePanel) (data : List (List InstantValue)) : List (List InstantValue) := columnsToRows_aux t data Std.mkHashMapImp
 
-inductive Panel {e : Exporter}
+inductive Panel {e : Environment}
 | graph (g : @GraphPanel e)
 | table (t : TablePanel)
 
-structure Dashboard (e : Exporter) where
+structure Dashboard (e : Environment) where
 name : String
 panels : List $ @Panel e
