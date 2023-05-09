@@ -6,6 +6,7 @@ open InstantVectorType
 structure GraphPanel {e : Environment} where
   promql : TypesafeInstantVector vector e
   --data : InstantVector
+  deriving Lean.ToJson
 
 def evalGraph' {e : Environment} (g : @GraphPanel e) (res : Nat) (endd : Nat) (steps : Nat) := ""
 
@@ -28,16 +29,19 @@ def graphToHTML {e : Environment} (g : @GraphPanel e) := s!"
 inductive ColumnValueSource
   | PrometheusLabelColumn (v : InstantVector vector)
   | PrometheusValueColumn (v : InstantVector vector)
+  deriving Lean.ToJson
 
 structure Column where
 name : String
 data : ColumnValueSource
 index_label : String -- { s : String // s ∈ metric.labels}
+deriving Lean.ToJson
 
 
 structure TablePanel where
 name : String
 columns : List Column
+deriving Lean.ToJson
 
 structure InstantValue where
 labels : List KeyValuePair
@@ -62,7 +66,9 @@ def prometheusQueryInstant (v : InstantVector vector) : IO (List InstantValue) :
 inductive Panel {e : Environment}
 | graph (g : @GraphPanel e)
 | table (t : TablePanel)
+deriving Lean.ToJson
 
 structure Dashboard (e : Environment) where
-name : String
-panels : List $ @Panel e
+  name : String
+  panels : List $ @Panel e
+  deriving Lean.ToJson

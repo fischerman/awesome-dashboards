@@ -5,6 +5,7 @@ inductive MetricType
 | gauge
 | histogram
 | untyped
+deriving Lean.FromJson, Lean.ToJson
 
 -- https://prometheus.io/docs/practices/naming/#base-units
 @[match_pattern]
@@ -15,13 +16,14 @@ inductive MetricUnit
 | time
 | unitless
 | div (dividend devisor : MetricUnit)
-deriving Repr, BEq, DecidableEq
+deriving Repr, BEq, DecidableEq, Lean.FromJson, Lean.ToJson
 
 structure Metric where
 name : String
 type : MetricType
 labels : List String  -- TODO: some metrics have dynamic label keys
 unit : MetricUnit
+deriving Lean.FromJson, Lean.ToJson
 
 def up : Metric := {
   name := "up"
@@ -32,6 +34,7 @@ def up : Metric := {
 
 structure Exporter where
 metrics : List Metric
+deriving Lean.FromJson, Lean.ToJson
 
 -- The resulting labels of the scrape is a combination of target labels and metric labels. 
 -- Prometheus has a config "honor_labels" which deals with conflict.
@@ -39,6 +42,7 @@ metrics : List Metric
 structure ScrapeConfig where
 targetLabels : List String
 exporter : Exporter
+deriving Lean.FromJson, Lean.ToJson
 
 namespace ScrapeConfig
 
@@ -49,18 +53,22 @@ end ScrapeConfig
 
 structure Environment where
 scrapeConfigs: List ScrapeConfig
+deriving Lean.FromJson, Lean.ToJson
 
 inductive VectorMatching
-| ignoring
-| on
+  | ignoring
+  | on
+  deriving Lean.FromJson, Lean.ToJson
 
 inductive AggregationSelector 
+  deriving Lean.FromJson, Lean.ToJson
 
 def name_label := "__name__"
 
 structure KeyValuePair where
 (key : String)
 (value : String)
+deriving Lean.FromJson, Lean.ToJson
 
 def KeyValuePair.toString (kvp : KeyValuePair) := kvp.key ++ "=\"" ++ kvp.value ++ "\""
 
@@ -71,6 +79,7 @@ def joinSep (s : List String) (sep : String) : String := match s with
 
 structure LabelMatchers where
   equal : List KeyValuePair
+  deriving Lean.FromJson, Lean.ToJson
 
 namespace LabelMatchers
 
@@ -93,14 +102,16 @@ namespace LabelMatchers
 end LabelMatchers
 
 inductive RangeVector
-| selector (lms : LabelMatchers) (duration : Nat)
+  | selector (lms : LabelMatchers) (duration : Nat)
+  deriving Lean.FromJson, Lean.ToJson
 
 def RangeVector.to_string : RangeVector → String
   | (selector lms d) => s!"{lms.toString}[{d}s]"
 
 inductive InstantVectorType
-| scalar
-| vector
+  | scalar
+  | vector
+  deriving Lean.FromJson, Lean.ToJson
 
 open InstantVectorType
 
@@ -114,6 +125,7 @@ inductive InstantVector : InstantVectorType → Type
   | rate (r : RangeVector) : InstantVector vector
   | label_replace (v : InstantVector vector) (dst replacement src regex : String) : InstantVector vector
   | time : InstantVector scalar 
+  deriving Lean.ToJson
 
 def is_name := λ (l : KeyValuePair) => l.key == name_label
 
@@ -135,8 +147,11 @@ def InstantVector.typesafe {t : InstantVectorType} (v : InstantVector t) (e : En
   | _ => true
 
 structure TypesafeInstantVector (t : InstantVectorType) (e : Environment) where
-v : InstantVector t
-h : InstantVector.typesafe v e := by simp
+  v : InstantVector t
+  h : InstantVector.typesafe v e := by simp
+
+instance (t : InstantVectorType) (e : Environment) : Lean.ToJson $ TypesafeInstantVector t e where
+  toJson := fun v => Lean.toJson v.v
 
 def InstantVector.toString {t : InstantVectorType} : InstantVector t → String
   | (selector lms offset) => (String.join $ List.map (λ l => l.value) (lms.equal.filter (λ l => l.key == name_label))) ++ "{" ++ joinSep (List.map KeyValuePair.toString (lms.equal.filter λ l => l.key != name_label)) ", " ++ "}"
