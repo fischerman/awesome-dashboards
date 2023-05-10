@@ -26,21 +26,17 @@ def graphToHTML {e : Environment} (g : @GraphPanel e) := s!"
 </div>
 "
 
-inductive ColumnValueSource
-  | PrometheusLabelColumn (v : InstantVector vector)
-  | PrometheusValueColumn (v : InstantVector vector)
-  deriving Lean.ToJson
-
 structure Column where
 name : String
-data : ColumnValueSource
-index_label : String -- { s : String // s ∈ metric.labels}
+v : InstantVector vector
 deriving Lean.ToJson
 
 
 structure TablePanel where
 name : String
+/-- This only defines the value columns. Labels might produce more columns. -/
 columns : List Column
+joinLabel : String
 deriving Lean.ToJson
 
 structure InstantValue where

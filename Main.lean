@@ -15,8 +15,9 @@ def myDashboard : Dashboard myPrometheusEnv := { name := "My Dashboard", panels 
     (Panel.graph { promql := { v := [pql| node_filesystem_avail_bytes{} ] } }),
     (Panel.graph { promql := { v := [pql| process_cpu_seconds_total{} ]}}),
     (Panel.graph { promql := { v := [pql| rate(node_network_receive_bytes_total{device="eth0"}[120]) ]}}),
-    (Panel.table { name := "My tables", columns := [
-      { name := "Free bytes", data := .PrometheusValueColumn [pql| node_filesystem_avail_bytes{} ], index_label := "a" }
+    (Panel.table { name := "My table", joinLabel := "device", columns := [
+      { name := "Free bytes", v := [pql| node_filesystem_avail_bytes{} ] },
+      { name := "Free files", v := [pql| node_filesystem_files_free{} ] }
     ] })
 ]}
 
