@@ -65,48 +65,41 @@ inductive AggregationSelector
 
 def name_label := "__name__"
 
-structure KeyValuePair where
-(key : String)
-(value : String)
+inductive LabelMatcher
+| equal (key : String) (value : String)
 deriving Lean.FromJson, Lean.ToJson
 
-def KeyValuePair.toString (kvp : KeyValuePair) := kvp.key ++ "=\"" ++ kvp.value ++ "\""
+namespace LabelMatcher
+
+  def toString (kvp : LabelMatcher) := match kvp with
+  | (.equal k v) => s!"{k}=\"{v}\""
+
+  def getMatchedName (lms : List LabelMatcher) : Option String := match lms with
+  | ⟨k, v⟩ :: xs => if k == name_label then .some v else getMatchedName xs
+  | [] => .none
+
+  def matches_name (lm : LabelMatcher) := match lm with
+  | (.equal k _) => k == name_label
+
+  def key (lm : LabelMatcher) := match lm with
+  | (.equal k _) => k
+
+  def value (lm : LabelMatcher) := match lm with
+  | (.equal _ v) => v
+
+end LabelMatcher
 
 def joinSep (s : List String) (sep : String) : String := match s with
 | [] => ""
 | x::[] => x
 | x::xs => x ++ sep ++ (joinSep xs sep)
 
-structure LabelMatchers where
-  equal : List KeyValuePair
-  deriving Lean.FromJson, Lean.ToJson
-
-namespace LabelMatchers
-
-  def empty : LabelMatchers := {equal := []}
-
-  def withEqualMatcher (m : LabelMatchers) (key : String) (value : String) := {
-    m with equal := {key := key, value:= value} :: m.equal
-  }
-
-  def withEqualMatchers' (m : LabelMatchers) (x : KeyValuePair) := {
-    m with equal := x :: m.equal
-  }
-
-  def withName (m : LabelMatchers) (value : String) := withEqualMatcher m name_label value
-
-  def toString (m : LabelMatchers) := "{" ++ joinSep (m.equal.map KeyValuePair.toString) ", " ++ "}"
-
-  def getMatchedName (m : LabelMatchers) : Option String := Option.map (fun e => e.value) (m.equal.find? fun e => e.key == name_label)
-
-end LabelMatchers
-
 inductive RangeVector
-  | selector (lms : LabelMatchers) (duration : Nat)
+  | selector (lms : List LabelMatcher) (duration : Nat)
   deriving Lean.FromJson, Lean.ToJson
 
 def RangeVector.to_string : RangeVector → String
-  | (selector lms d) => s!"{lms.toString}[{d}s]"
+  | (selector lms d) => s!"{(String.join $ List.map (λ l => l.value) (lms.filter LabelMatcher.matches_name)) ++ "{" ++ joinSep (List.map LabelMatcher.toString (lms.filter $ not ∘ LabelMatcher.matches_name)) ", " ++ "}"}[{d}s]"
 
 inductive InstantVectorType
   | scalar
@@ -116,7 +109,7 @@ inductive InstantVectorType
 open InstantVectorType
 
 inductive InstantVector : InstantVectorType → Type
-  | selector (lms : LabelMatchers) (offset : Nat) : InstantVector vector -- TODO: regex, negative, and proof for minimal label requirements
+  | selector (lms : List LabelMatcher) (offset : Nat) : InstantVector vector -- TODO: regex, negative, and proof for minimal label requirements
   | literal (v : Float) : InstantVector InstantVectorType.scalar
   | sub_vector (vector_matching : Option VectorMatching) (a b : InstantVector vector) : InstantVector vector
   | add_scalar_left (a : InstantVector scalar) (b : InstantVector vector) : InstantVector vector
@@ -127,17 +120,15 @@ inductive InstantVector : InstantVectorType → Type
   | time : InstantVector scalar 
   deriving Lean.ToJson
 
-def is_name := λ (l : KeyValuePair) => l.key == name_label
-
 -- A label matcher is safe when
 -- - every label that is used exists in combination with all other labels
 
 -- - currently requires that there is an equlity matcher on the name
 -- - matches on the any occurence of the metric name in the scrape config. Only one must fit. TODO: Check that all definitions are working.
-def typeSafeSelector (lms : LabelMatchers) (e : Environment) : Bool := match lms.getMatchedName with
+def typeSafeSelector (lms : List LabelMatcher) (e : Environment) : Bool := match LabelMatcher.getMatchedName lms with
 | (.some v) => Option.isSome $ e.scrapeConfigs.find? (fun c => Option.isSome $ c.exporter.metrics.find? (λ m =>
     v == m.name &&
-    (List.all (lms.equal.filter $ not ∘ is_name) (λ l => (m.labels ++ c.targetLabels ++ ["job", "instace"]).contains l.key ))
+    (List.all (lms.filter $ not ∘ LabelMatcher.matches_name) (λ l => (m.labels ++ c.targetLabels ++ ["job", "instace"]).contains l.key ))
   ))
 | .none => false
 
@@ -154,7 +145,7 @@ instance (t : InstantVectorType) (e : Environment) : Lean.ToJson $ TypesafeInsta
   toJson := fun v => Lean.toJson v.v
 
 def InstantVector.toString {t : InstantVectorType} : InstantVector t → String
-  | (selector lms offset) => (String.join $ List.map (λ l => l.value) (lms.equal.filter (λ l => l.key == name_label))) ++ "{" ++ joinSep (List.map KeyValuePair.toString (lms.equal.filter λ l => l.key != name_label)) ", " ++ "}"
+  | (selector lms offset) => (String.join $ List.map (λ l => l.value) (lms.filter LabelMatcher.matches_name)) ++ "{" ++ joinSep (List.map LabelMatcher.toString (lms.filter $ not ∘ LabelMatcher.matches_name)) ", " ++ "}"
   | time => "time()"
   | (label_replace v dst replace src regex) => "label_replace()"
   | (rate r) => s!"rate({r.to_string})"
@@ -167,18 +158,12 @@ instance {t : InstantVectorType} : ToString $ InstantVector t where
 instance {t : InstantVectorType} : Repr $ InstantVector t where
   reprPrec v _ := InstantVector.toString v
 
-#eval InstantVector.rate (RangeVector.selector (LabelMatchers.empty.withEqualMatcher "instance" "test") 5)
+#eval InstantVector.rate (RangeVector.selector [.equal "instance" "test"] 5)
 
 def Option.get : (a : Option α) → a.isSome → α
   | some a, _ => a
 
-def getNameLm? (lms : LabelMatchers) : Option String :=
-  let name? := lms.equal.find? (λl => is_name l)
-  match name? with
-    | (Option.some name) => name.value
-    | (Option.none) => Option.none
-
-def getMetricDef? (e : Environment) (lms : LabelMatchers) : Option Metric := match getNameLm? lms with
+def getMetricDef? (e : Environment) (lms : List LabelMatcher) : Option Metric := match LabelMatcher.getMatchedName lms with
   | (Option.some name) => (e.scrapeConfigs.findSome? (fun c => c.exporter.metrics.find? (λm => m.name = name)))
   | (Option.none) => Option.none
 
@@ -212,45 +197,40 @@ def name : Parser := withAntiquot (mkAntiquot "name" `LX.text) {
 @[combinator_formatter name] def name.formatter : Formatter := pure ()
 @[combinator_parenthesizer name] def name.parenthesizer : Parenthesizer := pure ()
 
-declare_syntax_cat labelmatcher_aux
-syntax name "=" strLit : labelmatcher_aux
+declare_syntax_cat labelmatcher
+syntax name "=" strLit : labelmatcher
 macro_rules
-| `(labelmatcher_aux| $key:name=$value) => `({key := $(quote key.raw[0].getAtomVal), value:= $value})
-syntax labelmatcher_aux : term
+| `(labelmatcher| $key:name=$value) => `(LabelMatcher.equal $(quote key.raw[0].getAtomVal) $value)
 
 -- 
-declare_syntax_cat labelmatcher
+declare_syntax_cat labelmatchers
 -- The parser 
-syntax "{" labelmatcher_aux,* "}" : labelmatcher
--- Make label matcher a valid term (not really neccessary)
-syntax labelmatcher : term
-
+syntax "{" labelmatcher,* "}" : labelmatchers
 -- See https://github.com/leanprover/lean4/pull/1251/commits/9eff6572334a40f671928400614309455c76ef38#diff-52ef0c67eea613acf6c0b6284063fd7112cdd40750de38365c214abaef246db4R1854
 -- TODO: Remove this workaround
 open TSyntax.Compat
-
 -- How to translate label matchers into Lean terms
 macro_rules
-| `(labelmatcher| {}) => `(LabelMatchers.empty)
-| `(labelmatcher| { $x }) => `(LabelMatchers.empty.withEqualMatchers' $x)
--- | `(labelmatcher| { $xs,* }) => `($(Array.map (fun x => x) xs))
+-- | `(labelmatchers| { $x,$xs,* }) => `($x :: {$xs:labelmatcher,*})
+| `(labelmatchers| { $x }) => `([$x])
+| `(labelmatchers| {}) => `([])
 
 declare_syntax_cat rangevector
-syntax name (labelmatcher) "[" numLit "]" : rangevector
+syntax name (labelmatchers) "[" numLit "]" : rangevector
 
 macro_rules
-| `(rangevector| $name:name $xs [ $range ] ) => `(RangeVector.selector ($(xs).withName $(quote name.raw[0].getAtomVal)) $range)
+| `(rangevector| $name:name $xs [ $range ] ) => `(RangeVector.selector ((LabelMatcher.equal name_label $(quote name.raw[0].getAtomVal)) :: $(xs)) $range)
 
 declare_syntax_cat instantvector
-syntax name (labelmatcher)? : instantvector
+syntax name (labelmatchers)? : instantvector
 syntax "time()" : instantvector
 syntax "rate(" rangevector ")" : instantvector
 syntax instantvector " - " instantvector : instantvector
 
 macro_rules
 | `(instantvector| time()) => `(InstantVector.time)
-| `(instantvector| $name:name) => `(InstantVector.selector (LabelMatchers.empty.withName $(quote name.raw[0].getAtomVal)) 0)
-| `(instantvector| $name:name $xs) => `(InstantVector.selector ($(xs).withName $(quote name.raw[0].getAtomVal)) 0)
+| `(instantvector| $name:name) => `(InstantVector.selector [LabelMatcher.equal name_label $(quote name.raw[0].getAtomVal)] 0)
+| `(instantvector| $name:name $xs:labelmatchers) => `(InstantVector.selector ((LabelMatcher.equal name_label $(quote name.raw[0].getAtomVal)) :: $(xs)) 0)
 | `(instantvector| $a-$b) => `(InstantVector.sub_vector Option.none $a $b)
 | `(instantvector| rate($rv)) => `(InstantVector.rate $rv)
 
@@ -265,7 +245,7 @@ set_option pp.rawOnError true
 #eval [pql| up{}]
 #eval [pql| up{instance="localhost"}]
 #eval [pql| up - up]
--- #eval [pql| up{test="abc", lan="def"}]
+-- #eval [pql| up{test="abc", lan="def"} ]
 #eval [pql| time()]
 #eval [pql| rate(up{}[7])]
 

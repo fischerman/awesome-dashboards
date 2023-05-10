@@ -44,14 +44,14 @@ columns : List Column
 deriving Lean.ToJson
 
 structure InstantValue where
-labels : List KeyValuePair
+labels : List LabelMatcher
 value : Float
 
 -- sample data
 def prometheusQueryInstant (v : InstantVector vector) : IO (List InstantValue) := do
   return [
-    { labels := [{key := "__name__", value := "up"}, {key := "job", value := "prometheus"}], value := 1 },
-    { labels := [{key := "__name__", value := "up"}, {key := "job", value := "alertmanager"}], value := 0 }
+    { labels := [.equal "__name__" "up", .equal "job" "prometheus"], value := 1 },
+    { labels := [.equal "__name__" "up", .equal "job" "alertmanager"], value := 0 }
   ]
 
 -- def rowsToMap (t : TablePanel) : Std.HashMapImp → List InstantValue

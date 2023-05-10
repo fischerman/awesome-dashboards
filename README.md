@@ -5,7 +5,7 @@ Start a local Grafana instance with a configured dashboard provider. See `run-gr
 Generate the dashboard.
 
 ```
-lake build && ./build/bin/awesome-dashboards > grafana/dashboards/dashboard.json
+lake build && ./build/bin/dashboard > grafana/dashboards/dashboard.json
 ```
 
 ## References
