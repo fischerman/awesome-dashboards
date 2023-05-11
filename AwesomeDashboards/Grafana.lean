@@ -57,6 +57,7 @@ instance : Lean.ToJson GrafanaPanelTransformation where
 structure GrafanaPanel where
   type: String
   title: String
+  description: Option String := .none
   gridPos: GrafanaPanelGridPos
   context: String
   datasource: GrafanaPanelDatasource
@@ -123,6 +124,7 @@ def panelToGrafanaPanel {e : Environment} (p : @Panel e) (h : Nat) : GrafanaPane
     y := h,
   },
   context := "Hello world",
+  description := g.promql.helpString,
   datasource := myDatasource,
   targets := some [
     { datasource := myDatasource, expr := g.promql.v.toString, refId := "A" }

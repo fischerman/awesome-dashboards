@@ -4,7 +4,8 @@ def node_boot_time_seconds : Metric := {
   name := "node_boot_time_seconds"
   type := MetricType.gauge
   labels := []
-  unit := MetricUnit.seconds
+  unit := MetricUnit.time,
+  help := "Node boot time, in unixtime."
 }
 
 def node_filesystem_avail_bytes : Metric := {
@@ -12,6 +13,7 @@ def node_filesystem_avail_bytes : Metric := {
   type := MetricType.gauge
   labels := ["device", "fstype", "mountpoint"]
   unit := MetricUnit.bytes
+  help := "Filesystem space available to non-root users in bytes."
 }
 
 def process_cpu_seconds_total : Metric := {
@@ -19,6 +21,7 @@ def process_cpu_seconds_total : Metric := {
   type := MetricType.counter
   labels := []
   unit := MetricUnit.seconds
+  help := "Total user and system CPU time spent in seconds."
 }
 
 def node_network_receive_bytes_total : Metric := {
@@ -26,6 +29,7 @@ def node_network_receive_bytes_total : Metric := {
   type := MetricType.counter
   labels := ["device"]
   unit := MetricUnit.bytes
+  help := "Network device statistic receive_bytes."
 }
 
 def node_exporter : Exporter := {

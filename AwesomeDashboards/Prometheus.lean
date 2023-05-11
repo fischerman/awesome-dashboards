@@ -23,6 +23,7 @@ name : String
 type : MetricType
 labels : List String  -- TODO: some metrics have dynamic label keys
 unit : MetricUnit
+help : String
 deriving Lean.FromJson, Lean.ToJson
 
 def up : Metric := {
@@ -30,6 +31,7 @@ def up : Metric := {
   type := MetricType.gauge
   labels := ["instance", "job"]
   unit := MetricUnit.bool
+  help := "Whether the target is up"
 }
 
 structure Exporter where
@@ -108,6 +110,10 @@ inductive InstantVectorType
 
 open InstantVectorType
 
+/--
+  This has to be an indexed family because "InstantVector scalar" depends on "InstantVecot vector" and vice versa. 
+  Moreover both types are valid "entrypoints" for a query.
+-/
 inductive InstantVector : InstantVectorType → Type
   | selector (lms : List LabelMatcher) (offset : Nat) : InstantVector vector -- TODO: regex, negative, and proof for minimal label requirements
   | literal (v : Float) : InstantVector InstantVectorType.scalar
@@ -120,11 +126,32 @@ inductive InstantVector : InstantVectorType → Type
   | time : InstantVector scalar 
   deriving Lean.ToJson
 
--- A label matcher is safe when
--- - every label that is used exists in combination with all other labels
+namespace InstantVector
 
--- - currently requires that there is an equlity matcher on the name
--- - matches on the any occurence of the metric name in the scrape config. Only one must fit. TODO: Check that all definitions are working.
+  def toString {t : InstantVectorType} : InstantVector t → String
+    | (selector lms offset) => (String.join $ List.map (λ l => l.value) (lms.filter LabelMatcher.matches_name)) ++ "{" ++ joinSep (List.map LabelMatcher.toString (lms.filter $ not ∘ LabelMatcher.matches_name)) ", " ++ "}"
+    | time => "time()"
+    | (label_replace v dst replace src regex) => "label_replace()"
+    | (rate r) => s!"rate({r.to_string})"
+    | (sub_vector vm a b) => s!"{a.toString} - {b.toString}"
+    | _ => ""
+
+  inductive Subterm : {t t' : InstantVectorType} →  InstantVector t → InstantVector t' → Prop where
+    | sub_vector_left {t : InstantVectorType} {vm : Option VectorMatching} {a b : InstantVector vector} {x : InstantVector t} : Subterm x a → Subterm x (.sub_vector vm a b)
+    | sub_vector_right {t : InstantVectorType} {vm : Option VectorMatching} {a b : InstantVector vector} {x : InstantVector t} : Subterm x b → Subterm x (.sub_vector vm a b)
+    --| add_scalar_left_scalar : Subterm 
+    | refl {t : InstantVectorType} (x : InstantVector t) : Subterm x x
+
+  example : Subterm (.selector [] 0) (.sub_vector .none (.sub_vector .none (.selector [] 0) (.selector [] 1)) (.selector [] 1)) := by repeat constructor
+end InstantVector
+
+/--
+A label matcher is safe when
+- every label that is used exists in combination with all other labels
+
+- currently requires that there is an equlity matcher on the name
+- matches on the any occurence of the metric name in the scrape config. Only one must fit. TODO: Check that all definitions are working.
+-/
 def typeSafeSelector (lms : List LabelMatcher) (e : Environment) : Bool := match LabelMatcher.getMatchedName lms with
 | (.some v) => Option.isSome $ e.scrapeConfigs.find? (fun c => Option.isSome $ c.exporter.metrics.find? (λ m =>
     v == m.name &&
@@ -137,20 +164,39 @@ def InstantVector.typesafe {t : InstantVectorType} (v : InstantVector t) (e : En
   | (InstantVector.sub_vector _ a b) => typesafe a e && typesafe b e
   | _ => true
 
+theorem subterm_typesafe {e : Environment} {t t' : InstantVectorType} (v : InstantVector t) (v' : InstantVector t') (h : InstantVector.Subterm v v') (h' : v'.typesafe e) : v.typesafe e := by
+  unfold InstantVector.typesafe
+  sorry
+  -- induction v'
+    
+
+
 structure TypesafeInstantVector (t : InstantVectorType) (e : Environment) where
   v : InstantVector t
   h : InstantVector.typesafe v e := by simp
 
+namespace TypesafeInstantVector
+  variable {t : InstantVectorType} {e : Environment}
+
+  /--
+    It isn't really sensible to retrieve a single help string from a query.
+    There could multiple metrics or none at all.
+    This is just for demonstration purposes. A more fruitful approach would be to generate a string from all components of the query.
+  -/
+  def helpString : {t : InstantVectorType} → TypesafeInstantVector t e → String
+    | t, ⟨v, h⟩ => match v with
+      | .selector lms _ => (match LabelMatcher.getMatchedName lms with
+        | .some v => Option.getD (e.scrapeConfigs.findSome? (fun c => c.exporter.metrics.findSome? (fun m => if m.name == v then m.help else .none))) ""
+        | .none => ""
+      )
+      | .label_replace v' _ _ _ _ => helpString ⟨v', sorry⟩ -- use subterm_typesafe here
+      | _ => ""
+      
+
+end TypesafeInstantVector
+
 instance (t : InstantVectorType) (e : Environment) : Lean.ToJson $ TypesafeInstantVector t e where
   toJson := fun v => Lean.toJson v.v
-
-def InstantVector.toString {t : InstantVectorType} : InstantVector t → String
-  | (selector lms offset) => (String.join $ List.map (λ l => l.value) (lms.filter LabelMatcher.matches_name)) ++ "{" ++ joinSep (List.map LabelMatcher.toString (lms.filter $ not ∘ LabelMatcher.matches_name)) ", " ++ "}"
-  | time => "time()"
-  | (label_replace v dst replace src regex) => "label_replace()"
-  | (rate r) => s!"rate({r.to_string})"
-  | (sub_vector vm a b) => s!"{a.toString} - {b.toString}"
-  | _ => ""
 
 instance {t : InstantVectorType} : ToString $ InstantVector t where
   toString := InstantVector.toString
