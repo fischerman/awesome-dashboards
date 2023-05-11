@@ -211,9 +211,7 @@ syntax "{" labelmatcher,* "}" : labelmatchers
 open TSyntax.Compat
 -- How to translate label matchers into Lean terms
 macro_rules
--- | `(labelmatchers| { $x,$xs,* }) => `($x :: {$xs:labelmatcher,*})
-| `(labelmatchers| { $x }) => `([$x])
-| `(labelmatchers| {}) => `([])
+| `(labelmatchers| { $xs,* }) => `([$xs,*])
 
 declare_syntax_cat rangevector
 syntax name (labelmatchers) "[" numLit "]" : rangevector
@@ -245,11 +243,8 @@ set_option pp.rawOnError true
 #eval [pql| up{}]
 #eval [pql| up{instance="localhost"}]
 #eval [pql| up - up]
--- #eval [pql| up{test="abc", lan="def"} ]
+#eval [pql| up{test="abc", lan="def"} ]
 #eval [pql| time()]
 #eval [pql| rate(up{}[7])]
-
-
-#eval s!"f"
 
 -- syntax:max can be used to change precendense

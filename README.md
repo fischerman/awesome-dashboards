@@ -12,3 +12,5 @@ lake build && ./build/bin/dashboard > grafana/dashboards/dashboard.json
 
 - https://github.com/grafana/dashboard-spec/tree/master/specs/7.0
 - https://github.com/OpenObservability/OpenMetrics/blob/main/specification/OpenMetrics.md
+- [PromQL syntax in yaac format](https://github.com/prometheus/prometheus/blob/2aacd807b3ec6ddd90ae55f3a42f4cffed561ea9/promql/generated_parser.y)
+    - We could [extract BNF from yaac](https://github.com/prometheus/prometheus/blob/2aacd807b3ec6ddd90ae55f3a42f4cffed561ea9/promql/generated_parser.y), generate a parser from PromQL syntax in Lean and prove that we generate only syntactically valid PromQL queries.
