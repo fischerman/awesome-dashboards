@@ -8,7 +8,7 @@ import Lean.Data.Json
 open Lean.Widget
 
 def myPrometheusEnv : Environment := {
-  scrapeConfigs := [{ targetLabels := ["job", "instance"], exporter := node_exporter }]
+  scrapeConfigs := [{ targetLabels := [], exporter := node_exporter }]
 }
 
 def myDashboard : Dashboard myPrometheusEnv := { name := "My Dashboard", panels := [
@@ -21,10 +21,10 @@ def myDashboard : Dashboard myPrometheusEnv := { name := "My Dashboard", panels 
     ] })
 ]}
 
+#eval (⟨[pql| label_replace(node_filesystem_avail_bytes{}, "new", "$1-xyz", "job", "(.*)") ], by simp⟩ : TypesafeInstantVector .vector myPrometheusEnv).labels
+
 def main : IO Unit := do
   IO.print $ Lean.toJson $ dashboardToGrafana myDashboard
   return
-
-#eval Lean.toJson myDashboard
 
 #widget dashboardWidget (Lean.toJson myDashboard)

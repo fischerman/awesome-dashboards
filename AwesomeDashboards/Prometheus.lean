@@ -111,7 +111,7 @@ inductive InstantVectorType
 open InstantVectorType
 
 /--
-  This has to be an indexed family because "InstantVector scalar" depends on "InstantVecot vector" and vice versa. 
+  This has to be an indexed family because "InstantVector scalar" depends on "InstantVecot vector" and vice versa (see scalar()). 
   Moreover both types are valid "entrypoints" for a query.
 -/
 inductive InstantVector : InstantVectorType → Type
@@ -131,7 +131,7 @@ namespace InstantVector
   def toString {t : InstantVectorType} : InstantVector t → String
     | (selector lms offset) => (String.join $ List.map (λ l => l.value) (lms.filter LabelMatcher.matches_name)) ++ "{" ++ joinSep (List.map LabelMatcher.toString (lms.filter $ not ∘ LabelMatcher.matches_name)) ", " ++ "}"
     | time => "time()"
-    | (label_replace v dst replace src regex) => "label_replace()"
+    | (label_replace v dst replace src regex) => s!"label_replace({v.toString}, \"{dst}\", \"{replace}\", \"{src}\", \"{regex}\")"
     | (rate r) => s!"rate({r.to_string})"
     | (sub_vector vm a b) => s!"{a.toString} - {b.toString}"
     | _ => ""
@@ -191,7 +191,22 @@ namespace TypesafeInstantVector
       )
       | .label_replace v' _ _ _ _ => helpString ⟨v', sorry⟩ -- use subterm_typesafe here
       | _ => ""
-      
+  
+  def labels : {t : InstantVectorType} → TypesafeInstantVector t e → List String
+  | t, ⟨v, h⟩ => match v with
+    -- We want to use h as evidence to retrieve the labels
+    | .selector lms _ => (match LabelMatcher.getMatchedName lms with
+        | .some name => Option.getD (e.scrapeConfigs.findSome? (fun c => c.labels name)) []
+        | .none => []
+      )
+    | .literal v => []
+    | .add_scalar_left a b => labels ⟨b, sorry⟩
+    /- label_replace might or might not create a new label. 
+    The the current implementation we can't know whether the regex will match, so we always add the new label.
+    If the label was already present then it is now present twice... 
+    -/
+    | .label_replace v dst repl src reg => dst :: labels ⟨v, sorry⟩ 
+    | _ => []
 
 end TypesafeInstantVector
 
@@ -269,6 +284,7 @@ declare_syntax_cat instantvector
 syntax name (labelmatchers)? : instantvector
 syntax "time()" : instantvector
 syntax "rate(" rangevector ")" : instantvector
+syntax "label_replace(" instantvector "," strLit "," strLit "," strLit "," strLit ")" : instantvector
 syntax instantvector " - " instantvector : instantvector
 
 macro_rules
@@ -277,6 +293,7 @@ macro_rules
 | `(instantvector| $name:name $xs:labelmatchers) => `(InstantVector.selector ((LabelMatcher.equal name_label $(quote name.raw[0].getAtomVal)) :: $(xs)) 0)
 | `(instantvector| $a-$b) => `(InstantVector.sub_vector Option.none $a $b)
 | `(instantvector| rate($rv)) => `(InstantVector.rate $rv)
+| `(instantvector | label_replace($v, $dst, $repl, $src, $reg)) => `(InstantVector.label_replace $v $dst $repl $src $reg)
 
 syntax "[pql|" instantvector "]" : term
 
@@ -292,5 +309,6 @@ set_option pp.rawOnError true
 #eval [pql| up{test="abc", lan="def"} ]
 #eval [pql| time()]
 #eval [pql| rate(up{}[7])]
+#eval [pql| label_replace(up, "new", "$1-xyz", "job", "(.*)") ]
 
 -- syntax:max can be used to change precendense
