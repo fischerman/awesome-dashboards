@@ -1,0 +1,19 @@
+import AwesomeDashboards.Dashboard
+
+namespace AwesomeDashboards.Models.{{ .Namespace }}
+
+{{ range .MetricFamilies }}
+def {{ .Name }} : Metric := {
+  name := "{{ .Name }}"
+  help := "{{ .Help }}"
+  type := MetricType.{{ type .Type }}
+  labels := [{{ range $index, $label := labels .Metric }}{{ if $index }}, {{ end }}"{{ $label }}"{{end}}]
+  unit := MetricUnit.unitless
+}
+{{ end -}}
+
+def {{ .Namespace }} : Exporter := {
+  metrics := [{{ range $index, $metric := .MetricFamilies }}{{ if $index }}, {{ end }}{{ $metric.Name }}{{ end }}]
+}
+
+end AwesomeDashboards.Models.{{ .Namespace }}
