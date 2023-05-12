@@ -113,16 +113,11 @@ def mapI (f : α → Nat → β) : Nat → List α → List β
   | _, []    => []
   | n, a::as => f a n :: mapI f (n+1) as
 
-def panelToGrafanaPanel {e : Environment} (p : @Panel e) (h : Nat) : GrafanaPanel := match p with
+def panelToGrafanaPanel {e : Environment} (p : @Panel e) (pos : GrafanaPanelGridPos) : GrafanaPanel := match p with
 | Panel.graph g =>  { 
   type := "timeseries", 
   title := "",
-  gridPos := {
-    w := 24,
-    h := 10,
-    x := 0,
-    y := h,
-  },
+  gridPos := pos,
   context := "Hello world",
   description := g.promql.helpString,
   datasource := myDatasource,
@@ -142,12 +137,7 @@ def panelToGrafanaPanel {e : Environment} (p : @Panel e) (h : Nat) : GrafanaPane
       datasource := { type := "prometheus", uid := "OoN46punz" }, 
       context := "Hello table", 
       title := t.name, 
-      gridPos := {
-        w := 24,
-        h := 10,
-        x := 0,
-        y := h,
-      },
+      gridPos := pos,
       targets := some $ mapI (fun c i => 
         { datasource := myDatasource, expr := c.v.toString, refId := String.mk [Char.ofNat (65+i)], format := "table", instant := true, range := false }
       ) 0 t.columns,
@@ -171,8 +161,12 @@ def panelToGrafanaPanel {e : Environment} (p : @Panel e) (h : Nat) : GrafanaPane
       }
     }
 
-def panelsToGrafanaPanels {e : Environment} (ps : List $ @Panel e) (h : Nat) : List GrafanaPanel := match ps with
-| (p :: ps) => panelToGrafanaPanel p h :: panelsToGrafanaPanels ps (h+10)
+def panelsToGrafanaPanels {e : Environment} (ps : List $ @Panel e) (x : Nat) (y : Nat) (w : Nat) (h : Nat) : List GrafanaPanel := match ps with
+| (p :: ps) => panelToGrafanaPanel p { x := x, y := y, h := h, w := w } :: panelsToGrafanaPanels ps (x+w) y w h
+| [] => []
+
+def rowsToGrafanaPanels {e : Environment} (ps : List $ Row e) (y : Nat) : List GrafanaPanel := match ps with
+| (r :: rs) => (rowsToGrafanaPanels rs (y+10)) ++ (panelsToGrafanaPanels r.panels 0 y (24 / r.panels.length) r.height)
 | [] => []
 
 def dashboardToGrafana {e : Environment} (d : @Dashboard e) : GrafanaDashboard := {
@@ -181,5 +175,5 @@ def dashboardToGrafana {e : Environment} (d : @Dashboard e) : GrafanaDashboard :
   title := d.name,
   tags := [],
   schemaVersion := 36,
-  panels := panelsToGrafanaPanels d.panels 0
+  panels := rowsToGrafanaPanels d.panels 0
 }

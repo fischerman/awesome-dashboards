@@ -64,7 +64,12 @@ inductive Panel {e : Environment}
 | table (t : TablePanel)
 deriving Lean.ToJson
 
+structure Row (e : Environment) where
+  panels : List $ @Panel e
+  height := 10
+  deriving Lean.ToJson
+
 structure Dashboard (e : Environment) where
   name : String
-  panels : List $ @Panel e
+  panels : List $ Row e
   deriving Lean.ToJson
