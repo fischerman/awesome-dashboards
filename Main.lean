@@ -13,7 +13,7 @@ def myPrometheusEnv : Environment := {
 
 def myDashboard : Dashboard myPrometheusEnv := { name := "My Dashboard", panels := [{
   panels := [
-    (.graph { promql := { v := [pql| node_filesystem_avail_bytes{} ] } }),
+    (.graph { promql := { v := [pql| node_filesystem_avail_bytes{} ]}, legendFormat := "{{device}}"}),
     (.graph { promql := { v := [pql| process_cpu_seconds_total{} ]}})
   ]
 } , {

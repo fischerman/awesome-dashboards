@@ -5,7 +5,7 @@ open InstantVectorType
 
 structure GraphPanel {e : Environment} where
   promql : TypesafeInstantVector .vector e
-  --data : InstantVector
+  legendFormat : Option String := .none
   deriving Lean.ToJson
 
 def evalGraph' {e : Environment} (g : @GraphPanel e) (res : Nat) (endd : Nat) (steps : Nat) := ""

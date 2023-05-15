@@ -18,6 +18,7 @@ structure GrafanaPanelTarget where
   expr: String
   refId: String
   format: Option String := none
+  legendFormat: Option String := .none
   instant: Option Bool := none
   range: Option Bool := none
 deriving  Lean.ToJson
@@ -143,7 +144,7 @@ def panelToGrafanaPanel {e : Environment} (p : @Panel e) (pos : GrafanaPanelGrid
   description := g.promql.helpString,
   datasource := myDatasource,
   targets := some [
-    { datasource := myDatasource, expr := g.promql.v.toString, refId := "A" }
+    { datasource := myDatasource, expr := g.promql.v.toString, refId := "A", legendFormat := g.legendFormat }
   ],
   fieldConfig := {
     defaults := {
