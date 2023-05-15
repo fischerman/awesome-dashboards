@@ -46,10 +46,12 @@ targetLabels : List String
 exporter : Exporter
 deriving Lean.FromJson, Lean.ToJson
 
+def name_label := "__name__"
+
 namespace ScrapeConfig
 
   def labels (s : ScrapeConfig) (name: String) : Option $ List String := 
-    Option.map (fun v => s.targetLabels ++ v.labels ++ ["job", "instace"]) (s.exporter.metrics.find? (fun m => m.name == name))
+    Option.map (fun v => s.targetLabels ++ v.labels ++ ["job", "instance", name_label]) (s.exporter.metrics.find? (fun m => m.name == name))
 
 end ScrapeConfig
 
@@ -64,8 +66,6 @@ inductive VectorMatching
 
 inductive AggregationSelector 
   deriving Lean.FromJson, Lean.ToJson
-
-def name_label := "__name__"
 
 inductive LabelMatcher
 | equal (key : String) (value : String)
@@ -155,7 +155,7 @@ A label matcher is safe when
 def typeSafeSelector (lms : List LabelMatcher) (e : Environment) : Bool := match LabelMatcher.getMatchedName lms with
 | (.some v) => Option.isSome $ e.scrapeConfigs.find? (fun c => Option.isSome $ c.exporter.metrics.find? (λ m =>
     v == m.name &&
-    (List.all (lms.filter $ not ∘ LabelMatcher.matches_name) (λ l => (m.labels ++ c.targetLabels ++ ["job", "instace"]).contains l.key ))
+    (List.all (lms.filter $ not ∘ LabelMatcher.matches_name) (λ l => (m.labels ++ c.targetLabels ++ ["job", "instance"]).contains l.key ))
   ))
 | .none => false
 
@@ -194,12 +194,12 @@ namespace TypesafeInstantVector
   
   def labels : {t : InstantVectorType} → TypesafeInstantVector t e → List String
   | t, ⟨v, h⟩ => match v with
-    -- We want to use h as evidence to retrieve the labels
     | .selector lms _ => (match LabelMatcher.getMatchedName lms with
         | .some name => Option.getD (e.scrapeConfigs.findSome? (fun c => c.labels name)) []
         | .none => []
       )
     | .literal v => []
+    -- We want to use h as evidence to retrieve the labels
     | .add_scalar_left a b => labels ⟨b, sorry⟩
     /- label_replace might or might not create a new label. 
     The the current implementation we can't know whether the regex will match, so we always add the new label.

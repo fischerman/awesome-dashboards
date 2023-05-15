@@ -4,7 +4,7 @@ import AwesomeDashboards.Prometheus
 open InstantVectorType
 
 structure GraphPanel {e : Environment} where
-  promql : TypesafeInstantVector vector e
+  promql : TypesafeInstantVector .vector e
   --data : InstantVector
   deriving Lean.ToJson
 
@@ -26,16 +26,17 @@ def graphToHTML {e : Environment} (g : @GraphPanel e) := s!"
 </div>
 "
 
-structure Column where
+structure Column (e : Environment) where
 name : String
-v : InstantVector vector
+promql : TypesafeInstantVector .vector e
+additionalLabels : List String := []
 deriving Lean.ToJson
 
 
-structure TablePanel where
+structure TablePanel (e : Environment) where
 name : String
 /-- This only defines the value columns. Labels might produce more columns. -/
-columns : List Column
+columns : List $ Column e
 joinLabel : String
 deriving Lean.ToJson
 
@@ -61,7 +62,7 @@ def prometheusQueryInstant (v : InstantVector vector) : IO (List InstantValue) :
 
 inductive Panel {e : Environment}
 | graph (g : @GraphPanel e)
-| table (t : TablePanel)
+| table (t : TablePanel e)
 deriving Lean.ToJson
 
 structure Row (e : Environment) where

@@ -16,6 +16,14 @@ def node_filesystem_avail_bytes : Metric := {
   help := "Filesystem space available to non-root users in bytes."
 }
 
+def node_filesystem_files_free : Metric := {
+  name := "node_filesystem_files_free"
+  help := "Filesystem total free file nodes."
+  type := MetricType.gauge
+  labels := ["device", "fstype", "mountpoint"]
+  unit := MetricUnit.bytes
+}
+
 def process_cpu_seconds_total : Metric := {
   name := "process_cpu_seconds_total"
   type := MetricType.counter
@@ -33,7 +41,7 @@ def node_network_receive_bytes_total : Metric := {
 }
 
 def node_exporter : Exporter := {
-  metrics := [node_boot_time_seconds, node_filesystem_avail_bytes, process_cpu_seconds_total, node_network_receive_bytes_total]
+  metrics := [node_boot_time_seconds, node_filesystem_avail_bytes, process_cpu_seconds_total, node_network_receive_bytes_total, node_filesystem_files_free]
 }
 
 def lm : List LabelMatcher := [.equal "__name__" "node_filesystem_avail_bytes"]

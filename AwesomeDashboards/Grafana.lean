@@ -26,8 +26,28 @@ structure FieldConfigDefaults where
   unit: String
 deriving  Lean.ToJson
 
+inductive FieldConfigOverrideMatcher
+| byName (name: String)
+
+instance : Lean.ToJson FieldConfigOverrideMatcher where
+  toJson := fun t => match t with 
+  | .byName n => Lean.Json.mkObj [⟨"id", Lean.Json.str "byName"⟩, ⟨"options", Lean.Json.str n⟩]
+
+inductive FieldConfigOverrideProperty
+| unit (value: String)
+
+instance : Lean.ToJson FieldConfigOverrideProperty where
+  toJson := fun t => match t with 
+  | .unit v => Lean.Json.mkObj [⟨"id", Lean.Json.str "unit"⟩, ⟨"value", Lean.Json.str v⟩]
+
+structure FieldConfigOverride where
+  matcher: FieldConfigOverrideMatcher
+  properties: List FieldConfigOverrideProperty
+deriving  Lean.ToJson
+
 structure FieldConfig where
   defaults: FieldConfigDefaults
+  overrides: List FieldConfigOverride
 deriving  Lean.ToJson
 
 structure GrafanaPanelSeriesToColumnsOptions where
@@ -139,16 +159,28 @@ def panelToGrafanaPanel {e : Environment} (p : @Panel e) (pos : GrafanaPanelGrid
       title := t.name, 
       gridPos := pos,
       targets := some $ mapI (fun c i => 
-        { datasource := myDatasource, expr := c.v.toString, refId := String.mk [Char.ofNat (65+i)], format := "table", instant := true, range := false }
+        { datasource := myDatasource, expr := c.promql.v.toString, refId := String.mk [Char.ofNat (65+i)], format := "table", instant := true, range := false }
       ) 0 t.columns,
       transformations := .some [
         .seriesToColumns { byField := t.joinLabel },
         .organize { 
-          excludeByName := Lean.HashMap.ofList [],
+          excludeByName := Lean.HashMap.ofList $ (
+            if t.columns.length = 1 then
+              [⟨"Time", true⟩]
+            else
+              mapI (fun _ i => ⟨s!"Time {i+1}", true⟩) 0 t.columns
+          ) ++ (
+            if h: t.columns.length = 1 then
+              let h' : 0 < List.length t.columns := by simp[h];
+              let c := t.columns[0]
+              List.map (⟨·, true⟩) $ c.promql.labels.filter (not ∘ (c.additionalLabels.contains ·))
+            else
+              List.foldl (·++·) [] $ mapI (fun c i => List.map (⟨s!"{·} {i+1}", true⟩) $ c.promql.labels.filter (not ∘ (c.additionalLabels.contains ·))) 0 t.columns
+          ),
           renameByName := Lean.HashMap.ofList (
             if h: t.columns.length = 1 then 
               let h' : 0 < List.length t.columns := by simp[h];
-              [⟨"Value", (t.columns[0]'h').name⟩] 
+              [⟨"Value", (t.columns[0]).name⟩]
             else 
               mapI (fun c i => ⟨s!"Value #{String.mk [Char.ofNat (65+i)]}", c.name⟩) 0 t.columns
           )
