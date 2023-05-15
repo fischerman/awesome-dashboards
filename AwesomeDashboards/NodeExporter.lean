@@ -21,7 +21,7 @@ def node_filesystem_files_free : Metric := {
   help := "Filesystem total free file nodes."
   type := MetricType.gauge
   labels := ["device", "fstype", "mountpoint"]
-  unit := MetricUnit.bytes
+  unit := MetricUnit.unitless
 }
 
 def process_cpu_seconds_total : Metric := {

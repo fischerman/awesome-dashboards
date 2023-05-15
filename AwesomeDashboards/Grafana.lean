@@ -107,7 +107,7 @@ def myGrafanaDashboard : GrafanaDashboard := {
       title := "", 
       gridPos := { x := 0, y := 0, w := 12, h := 5 },
       targets := none,
-      fieldConfig := { defaults := { unit := "none" }}
+      fieldConfig := { defaults := { unit := "none" }, overrides := []}
     },
     {
       type := "timeseries", 
@@ -120,14 +120,15 @@ def myGrafanaDashboard : GrafanaDashboard := {
         expr := "up{}",
         refId := "A",
       }],
-      fieldConfig := { defaults := { unit := "none" }}
+      fieldConfig := { defaults := { unit := "none" }, overrides := []}
     }
   ] }
 
 def metricUnitToGrafanaUnit (u : MetricUnit) : String := match u with
   | (MetricUnit.bytes) => "decbytes"
   | (MetricUnit.div MetricUnit.bytes MetricUnit.seconds) => "Bps"
-  | _ => "none"
+  | (MetricUnit.seconds) => "s"
+  | _ => "locale"
 
 def mapI (f : α → Nat → β) : Nat → List α → List β
   | _, []    => []
@@ -149,7 +150,8 @@ def panelToGrafanaPanel {e : Environment} (p : @Panel e) (pos : GrafanaPanelGrid
       unit := match unitOf e g.promql.v with
         | (some m) => metricUnitToGrafanaUnit m
         | _ => "none"
-    }
+    },
+    overrides := []
   }
 }
 | Panel.table t => {
@@ -189,7 +191,8 @@ def panelToGrafanaPanel {e : Environment} (p : @Panel e) (pos : GrafanaPanelGrid
       fieldConfig := {
         defaults := {
           unit := "none"
-        }
+        },
+        overrides := t.columns.map (fun c => { matcher := (.byName c.name), properties := [.unit $ metricUnitToGrafanaUnit $ Option.getD (unitOf e c.promql.v) .unitless]})
       }
     }
 
