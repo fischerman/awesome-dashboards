@@ -2,6 +2,7 @@ import AwesomeDashboards.Grafana
 import AwesomeDashboards.NodeExporter
 import AwesomeDashboards.Prometheus
 import AwesomeDashboards.Widget
+--import AwesomeDashboards.Lsp
 import Lean
 import Lean.Data.Json
 

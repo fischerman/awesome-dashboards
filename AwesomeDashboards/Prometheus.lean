@@ -1,5 +1,10 @@
 import Lean
 
+def joinSep (s : List String) (sep : String) : String := match s with
+| [] => ""
+| x::[] => x
+| x::xs => x ++ sep ++ (joinSep xs sep)
+
 inductive MetricType
 | counter
 | gauge
@@ -65,7 +70,17 @@ inductive VectorMatching
   deriving Lean.FromJson, Lean.ToJson
 
 inductive AggregationSelector 
+  | by (labels : List String)
+  | without (labels : List String)
   deriving Lean.FromJson, Lean.ToJson
+
+namespace AggregationSelector
+
+  def toString (a : AggregationSelector) : String := match a with
+  | (.by ls) => s!"by({joinSep ls ", "})"
+  | (.without ls) => s!"without({joinSep ls ", "})"
+
+end AggregationSelector
 
 inductive LabelMatcher
 | equal (key : String) (value : String)
@@ -91,11 +106,6 @@ namespace LabelMatcher
 
 end LabelMatcher
 
-def joinSep (s : List String) (sep : String) : String := match s with
-| [] => ""
-| x::[] => x
-| x::xs => x ++ sep ++ (joinSep xs sep)
-
 inductive RangeVector
   | selector (lms : List LabelMatcher) (duration : Nat)
   deriving Lean.FromJson, Lean.ToJson
@@ -119,8 +129,8 @@ inductive InstantVector : InstantVectorType → Type
   | literal (v : Float) : InstantVector InstantVectorType.scalar
   | sub_vector (vector_matching : Option VectorMatching) (a b : InstantVector vector) : InstantVector vector
   | add_scalar_left (a : InstantVector scalar) (b : InstantVector vector) : InstantVector vector
-  | sum (a : AggregationSelector) (v : InstantVector vector) : InstantVector vector
-  | topk (a : AggregationSelector) (k : Nat) (v : InstantVector vector) : InstantVector vector
+  | sum (a : Option AggregationSelector) (v : InstantVector vector) : InstantVector vector
+  | topk (a : Option AggregationSelector) (k : Nat) (v : InstantVector vector) : InstantVector vector
   | rate (r : RangeVector) : InstantVector vector
   | label_replace (v : InstantVector vector) (dst replacement src regex : String) : InstantVector vector
   | time : InstantVector scalar 
@@ -134,6 +144,9 @@ namespace InstantVector
     | (label_replace v dst replace src regex) => s!"label_replace({v.toString}, \"{dst}\", \"{replace}\", \"{src}\", \"{regex}\")"
     | (rate r) => s!"rate({r.to_string})"
     | (sub_vector vm a b) => s!"{a.toString} - {b.toString}"
+    | (.sum a v) => 
+        let a' := Option.getD (a.map (·.toString)) ""
+        s!"sum {a'} ({v.toString})"
     | _ => ""
 
   inductive Subterm : {t t' : InstantVectorType} →  InstantVector t → InstantVector t' → Prop where
@@ -243,6 +256,8 @@ def unitOf {t : InstantVectorType} (e : Environment) : InstantVector t → Optio
   | (.add_scalar_left  s v) => unitOf e v -- adding a scalar doesn't change the unit (however, it might no longer make sense)
   | (.rate r) => (r.unitOf e).map $ λx => MetricUnit.div x (MetricUnit.seconds)
   | (.literal f) => MetricUnit.unitless -- alternatively we could implement this function only vectors
+  | (.sum a v) => unitOf e v
+  | (.topk a k v) => unitOf e v
 
 open Lean
 open Lean.Parser
@@ -280,12 +295,25 @@ syntax name (labelmatchers) "[" numLit "]" : rangevector
 macro_rules
 | `(rangevector| $name:name $xs [ $range ] ) => `(RangeVector.selector ((LabelMatcher.equal name_label $(quote name.raw[0].getAtomVal)) :: $(xs)) $range)
 
+-- Used in places where a list of labels is required, e.g. by-clause.
+declare_syntax_cat labelref
+-- Without the asterisks we get "invalid syntax node kind 'labelref.pseudo'"
+-- TODO: Find a way to convert a list of label names to a list of strings without asterisks.
+syntax "**" name : labelref
+macro_rules
+| `(labelref| ** $n) => `(term| $(quote n.raw[0].getAtomVal))
+
 declare_syntax_cat instantvector
 syntax name (labelmatchers)? : instantvector
 syntax "time()" : instantvector
 syntax "rate(" rangevector ")" : instantvector
 syntax "label_replace(" instantvector "," strLit "," strLit "," strLit "," strLit ")" : instantvector
 syntax instantvector " - " instantvector : instantvector
+syntax "sum" "(" instantvector ")"  : instantvector
+syntax "sum" "by" "(" labelref,* ")" "(" instantvector ")"  : instantvector
+syntax "sum" "(" instantvector ")" "by" "(" labelref,* ")" : instantvector
+syntax "sum" "without" "(" labelref,* ")" "(" instantvector ")" : instantvector
+syntax "sum" "(" instantvector ")" "without" "(" labelref,* ")" : instantvector
 
 macro_rules
 | `(instantvector| time()) => `(InstantVector.time)
@@ -293,7 +321,12 @@ macro_rules
 | `(instantvector| $name:name $xs:labelmatchers) => `(InstantVector.selector ((LabelMatcher.equal name_label $(quote name.raw[0].getAtomVal)) :: $(xs)) 0)
 | `(instantvector| $a-$b) => `(InstantVector.sub_vector Option.none $a $b)
 | `(instantvector| rate($rv)) => `(InstantVector.rate $rv)
-| `(instantvector | label_replace($v, $dst, $repl, $src, $reg)) => `(InstantVector.label_replace $v $dst $repl $src $reg)
+| `(instantvector| label_replace($v, $dst, $repl, $src, $reg)) => `(InstantVector.label_replace $v $dst $repl $src $reg)
+| `(instantvector| sum($v)) => `(InstantVector.sum .none $v)
+| `(instantvector| sum by($bs,*) ($v)) => `(InstantVector.sum (AggregationSelector.by [$bs,*]) ($v))
+| `(instantvector| sum ($v) by($bs,*)) => `(InstantVector.sum (AggregationSelector.by [$bs,*]) ($v))
+| `(instantvector| sum without($bs,*) ($v)) => `(InstantVector.sum (AggregationSelector.by [$bs,*]) ($v))
+| `(instantvector| sum ($v) without($bs,*)) => `(InstantVector.sum (AggregationSelector.by [$bs,*]) ($v))
 
 syntax "[pql|" instantvector "]" : term
 
@@ -310,5 +343,10 @@ set_option pp.rawOnError true
 #eval [pql| time()]
 #eval [pql| rate(up{}[7])]
 #eval [pql| label_replace(up, "new", "$1-xyz", "job", "(.*)") ]
+#eval [pql| sum (up{})]
+#eval [pql| sum by(**instance) (up)]
+#eval [pql| sum (up) by(**instance)]
+#eval [pql| sum without (**instance) (up)]
+#eval [pql| sum (up) without (**instance)]
 
 -- syntax:max can be used to change precendense
