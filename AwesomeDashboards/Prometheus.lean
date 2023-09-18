@@ -219,6 +219,7 @@ namespace TypesafeInstantVector
     If the label was already present then it is now present twice... 
     -/
     | .label_replace v dst repl src reg => dst :: labels ⟨v, sorry⟩ 
+    /- Any operation on a range vectors will remove the label __name__ -/
     | _ => []
 
 end TypesafeInstantVector
@@ -359,12 +360,28 @@ inductive TemplateVariableType
 | label_value
 
 -- TODO: Should we build up the variables as they are added (and merge if we combine them and proving that they don't collide) or define them upfront?
--- Then we always get the minimal set
+-- Then we always get the minimal set.
+-- How do we build up the type? Is there a better inspiration than vector?
+-- What data structure can be used to to build vars, that guarantees that each name is only of at most one type?
 inductive TemplatedInstantVector (vars : String → Option TemplateVariableType) : InstantVectorType → Type where
-| selector (selectors: List (String × String)) (h : ∀ h, h ∈ selectors → vars h.snd = .some label_value) : TemplatedInstantVector vars vector
+| selector (selectors: List (String × String)) (h : ∀ h, h ∈ selectors → vars h.snd = .some .label_value) : TemplatedInstantVector vars vector
 | add_vector (x y : TemplatedInstantVector vars vector) : TemplatedInstantVector vars vector
 
 namespace TemplatedInstantVector
-  def toString (vars : String → Option TemplateVariableType) (t: InstantVectorType) (v: TemplatedInstantVector vars t) : String := match v with
-    | .selector sls h => s!"{joinSep (sls.map (λs => s.fst ++ "=" ++ s.snd)) "," }"
+  def toString {vars : String → Option TemplateVariableType} {t: InstantVectorType} (v: TemplatedInstantVector vars t) : String := match v with
+    | .selector sls h => "{" ++ joinSep (sls.map (λs => s.fst ++ "=\"$" ++ s.snd ++ "Ä")) "," ++ "}"
+    | .add_vector x y => s!"{toString x} + {toString y}"
+
+  instance {vars : String → Option TemplateVariableType} {t: InstantVectorType} : ToString (TemplatedInstantVector vars t) := {
+    toString := (fun v => v.toString)
+  }
+
+  def noVar : String → Option TemplateVariableType := (fun _ => .none)
+  def sampleVars : String → Option TemplateVariableType := (fun x => if x = "schedule" then .some .label_value else .none)
+
+  #eval TemplatedInstantVector.add_vector (.selector [⟨"instance", "schedule"⟩] (by
+    intro var
+    intro h
+    rfl
+  ) : TemplatedInstantVector sampleVars .vector) (.selector [] sorry : TemplatedInstantVector sampleVars _)
 end TemplatedInstantVector
