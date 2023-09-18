@@ -350,3 +350,21 @@ set_option pp.rawOnError true
 #eval [pql| sum (up) without (**instance)]
 
 -- syntax:max can be used to change precendense
+
+def up_templated_with_job (job: String) : InstantVector .vector := InstantVector.selector [.equal name_label job] 0
+
+def bytes_receives_templated_with_rate_window (rate_window : Nat) : InstantVector .vector := InstantVector.rate $ RangeVector.selector [.equal name_label "node_network_receive_bytes_total"] rate_window
+
+inductive TemplateVariableType
+| label_value
+
+-- TODO: Should we build up the variables as they are added (and merge if we combine them and proving that they don't collide) or define them upfront?
+-- Then we always get the minimal set
+inductive TemplatedInstantVector (vars : String → Option TemplateVariableType) : InstantVectorType → Type where
+| selector (selectors: List (String × String)) (h : ∀ h, h ∈ selectors → vars h.snd = .some label_value) : TemplatedInstantVector vars vector
+| add_vector (x y : TemplatedInstantVector vars vector) : TemplatedInstantVector vars vector
+
+namespace TemplatedInstantVector
+  def toString (vars : String → Option TemplateVariableType) (t: InstantVectorType) (v: TemplatedInstantVector vars t) : String := match v with
+    | .selector sls h => s!"{joinSep (sls.map (λs => s.fst ++ "=" ++ s.snd)) "," }"
+end TemplatedInstantVector
