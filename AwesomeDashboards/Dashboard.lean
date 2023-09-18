@@ -44,7 +44,7 @@ structure InstantValue where
 labels : List LabelMatcher
 value : Float
 
--- sample data
+/-- sample data -/
 def prometheusQueryInstant (v : InstantVector vector) : IO (List InstantValue) := do
   return [
     { labels := [.equal "__name__" "up", .equal "job" "prometheus"], value := 1 },

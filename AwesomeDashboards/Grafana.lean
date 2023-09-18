@@ -213,3 +213,54 @@ def dashboardToGrafana {e : Environment} (d : @Dashboard e) : GrafanaDashboard :
   schemaVersion := 36,
   panels := rowsToGrafanaPanels d.panels 0
 }
+
+namespace Unpositioned
+
+structure UnpositionedGrafanaPanel where
+  type: String
+  title: String
+  description: Option String := .none
+  context: String
+  datasource: GrafanaPanelDatasource
+  fieldConfig: FieldConfig
+  targets: Option $ List GrafanaPanelTarget
+  transformations : Option $ List GrafanaPanelTransformation := .none
+
+namespace UnpositionedGrafanaPanel
+  def position (p: UnpositionedGrafanaPanel) (pos: GrafanaPanelGridPos) : GrafanaPanel := {
+    type := p.type,
+    title := p.title,
+    description := p.description,
+    context := p.context,
+    datasource := p.datasource,
+    fieldConfig := p.fieldConfig,
+    targets := p.targets,
+    gridPos := pos,
+    transformations := p.transformations,
+  }
+end UnpositionedGrafanaPanel
+
+structure UnpositionedGrafanaDashboard where
+  id: Option String
+  uuid: Option String
+  title: String
+  tags: List String
+  schemaVersion: Nat
+  panels: List UnpositionedGrafanaPanel
+
+namespace GrafanaDashboard
+  def positionPanels (ps : List UnpositionedGrafanaPanel) (x : Nat) : List GrafanaPanel := match ps with
+  | (p :: ps) => p.position {h := 10, w := 12, x := x / 12, y := x % 12} :: positionPanels ps (x+12)
+  | [] => []
+
+  def toPositioned (d: UnpositionedGrafanaDashboard) : GrafanaDashboard := {
+    id := d.id,
+    uuid := d.uuid,
+    title := d.title,
+    tags := d.tags,
+    schemaVersion := d.schemaVersion,
+    panels := positionPanels d.panels 0
+  }
+end GrafanaDashboard
+
+end Unpositioned
