@@ -359,17 +359,93 @@ def bytes_receives_templated_with_rate_window (rate_window : Nat) : InstantVecto
 inductive TemplateVariableType
 | label_value
 
+def Vars := String → Option TemplateVariableType
+
+def decP (vars : Vars) (x : String × String) : Decidable (vars x.snd = some TemplateVariableType.label_value) :=
+  match vars x.snd with
+  | .none => isFalse (by
+        intro
+        contradiction
+      )
+  | .some TemplateVariableType.label_value => isTrue rfl
+
+instance (vars : Vars) (x : String × String) : Decidable (vars x.snd = some TemplateVariableType.label_value) := decP vars x 
+
+def t (vars : Vars) (selectors : List (String × String)) := ∀ h, h ∈ selectors → vars h.snd = .some .label_value
+
+def decT (vars : Vars) (selectors : List (String × String)) : Decidable (t vars selectors) :=
+  match selectors with
+  | [] => isTrue (by 
+      unfold t
+      intro s hs
+      cases hs
+    )
+  | x :: xs => if h : vars x.snd = .some .label_value then (by
+    unfold t
+    have tt := decT vars xs
+    -- How do I split Decidable on a list into head and tail
+    cases tt with
+    | isTrue z => {
+      unfold t at z
+      apply isTrue
+      intro hh
+      intro hhh
+      cases hhh with
+      | head => {
+        exact h
+      }
+      | tail => {
+        apply z
+        trivial
+      }
+    }
+    | isFalse z => {
+      apply isFalse
+      intro hh
+      apply z
+      unfold t
+      intro hhh
+      intro hhhh
+      apply hh
+      apply List.Mem.tail
+      exact hhhh
+    }
+  ) else isFalse (by 
+    unfold t
+    intro hh
+    have hhh := hh x (List.Mem.head _)
+    contradiction
+  )
+
+instance (vars : Vars) (selectors : List (String × String)) : Decidable (t vars selectors) := decT vars selectors
+
+inductive UnsafeTemplatedInstantVector (vars : Vars) : InstantVectorType → Type where
+| selector (selectors: List (String × String)) : UnsafeTemplatedInstantVector vars vector
+| add_vector (x y : UnsafeTemplatedInstantVector vars vector) : UnsafeTemplatedInstantVector vars vector
+
 -- TODO: Should we build up the variables as they are added (and merge if we combine them and proving that they don't collide) or define them upfront?
 -- Then we always get the minimal set.
 -- How do we build up the type? Is there a better inspiration than vector?
 -- What data structure can be used to to build vars, that guarantees that each name is only of at most one type?
-inductive TemplatedInstantVector (vars : String → Option TemplateVariableType) : InstantVectorType → Type where
+inductive TemplatedInstantVector (vars : Vars) : InstantVectorType → Type where
 | selector (selectors: List (String × String)) (h : ∀ h, h ∈ selectors → vars h.snd = .some .label_value) : TemplatedInstantVector vars vector
 | add_vector (x y : TemplatedInstantVector vars vector) : TemplatedInstantVector vars vector
 
+
 namespace TemplatedInstantVector
+  def check {t : InstantVectorType} (vars : Vars) (x : UnsafeTemplatedInstantVector vars t) : Option (TemplatedInstantVector vars t) := match x with
+  | .selector selectors => match decT vars selectors with
+      | isTrue h => .some $ .selector selectors h
+      | isFalse _ => .none
+  | .add_vector x y => match check vars x, check vars y with
+      | .none, _ => .none
+      | _, .none => .none
+      | .some a, .some b => .some $ .add_vector a b
+
+  -- TODO: function to build up vars automatically
+
   def toString {vars : String → Option TemplateVariableType} {t: InstantVectorType} (v: TemplatedInstantVector vars t) : String := match v with
-    | .selector sls h => "{" ++ joinSep (sls.map (λs => s.fst ++ "=\"$" ++ s.snd ++ "Ä")) "," ++ "}"
+    | .selector sls h => "{" ++ joinSep (sls.map (λs => s.fst ++ "=\"$" ++ s.snd ++ "\"")) "," ++ "}"
     | .add_vector x y => s!"{toString x} + {toString y}"
 
   instance {vars : String → Option TemplateVariableType} {t: InstantVectorType} : ToString (TemplatedInstantVector vars t) := {
@@ -379,9 +455,8 @@ namespace TemplatedInstantVector
   def noVar : String → Option TemplateVariableType := (fun _ => .none)
   def sampleVars : String → Option TemplateVariableType := (fun x => if x = "schedule" then .some .label_value else .none)
 
-  #eval TemplatedInstantVector.add_vector (.selector [⟨"instance", "schedule"⟩] (by
-    intro var
-    intro h
-    rfl
-  ) : TemplatedInstantVector sampleVars .vector) (.selector [] sorry : TemplatedInstantVector sampleVars _)
+  #eval check (λ x => match x with
+    | "instance" => .some .label_value
+    | _ => .none
+  ) (.add_vector (.selector [⟨"instance", "instance"⟩]) (.selector [⟨"instance", "instance"⟩]))
 end TemplatedInstantVector
