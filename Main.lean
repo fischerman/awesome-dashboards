@@ -14,13 +14,14 @@ def myPrometheusEnv : Environment := {
 
 def myDashboard : Dashboard myPrometheusEnv := { name := "My Dashboard", panels := [{
   panels := [
-    (.graph { promql := { v := [pql| node_filesystem_avail_bytes{} ]}, legendFormat := "{{device}}"}),
-    (.graph { promql := { v := [pql| process_cpu_seconds_total{} ]}})
+    (.graph { promql := .inl { v := [pql| node_filesystem_avail_bytes{} ]}, legendFormat := "{{device}}"}),
+    (.graph { promql := .inl { v := [pql| process_cpu_seconds_total{} ]}}),
+    (.graph { promql := .inr (.selector [⟨"instance", "instance"⟩] [⟨"__name__", "node_info"⟩] [])})
   ]
 } , {
   height := 6,
   panels := [
-    (.graph { promql := { v := [pql| rate(node_network_receive_bytes_total{device="eth0"}[120]) ]}}),
+    (.graph { promql := .inl { v := [pql| rate(node_network_receive_bytes_total{device="eth0"}[120]) ]}}),
     (.table { name := "My table", joinLabel := "device", columns := [
       { name := "Free bytes", promql := { v := [pql| node_filesystem_avail_bytes{} ]}, additionalLabels := ["fstype"] },
       { name := "Free files", promql := { v := [pql| node_filesystem_files_free{} ]} }
@@ -33,5 +34,3 @@ def myDashboard : Dashboard myPrometheusEnv := { name := "My Dashboard", panels 
 def main : IO Unit := do
   IO.print $ Lean.toJson $ dashboardToGrafana myDashboard
   return
-
-#widget dashboardWidget (Lean.toJson myDashboard)

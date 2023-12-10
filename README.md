@@ -16,7 +16,7 @@ Features:
 Requirements:
 - [elan](https://github.com/leanprover/elan)
 
-Start a local Grafana instance with a configured dashboard provider. See `run-grafana.sh` for an example.
+Start a local Grafana instance with a configured dashboard provider. See `./hack/run-grafana.sh` for an example.
 
 Generate the dashboard.
 

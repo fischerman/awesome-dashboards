@@ -357,8 +357,11 @@ def up_templated_with_job (job: String) : InstantVector .vector := InstantVector
 def bytes_receives_templated_with_rate_window (rate_window : Nat) : InstantVector .vector := InstantVector.rate $ RangeVector.selector [.equal name_label "node_network_receive_bytes_total"] rate_window
 
 inductive TemplateVariableType
+  /-- A variable that can be used for a label value. -/
 | label_value
+  /-- A variable that can be used in a selector representing a list of labels pairs. -/
 | key_value_pairs
+deriving DecidableEq
 
 def Vars := String → Option TemplateVariableType
 
@@ -378,6 +381,7 @@ instance (vars : Vars) (x : String × String) : Decidable (vars x.snd = some Tem
 
 def selector_values_bound (vars : Vars) (selectors : List (String × String)) := ∀ h, h ∈ selectors → vars h.snd = .some .label_value
 
+-- TODO: Instead of returning Decidable, we can return a wrapper that contains an error message when Decidable is false.
 def dec_selector_values_bound (vars : Vars) (selectors : List (String × String)) : Decidable (selector_values_bound vars selectors) :=
   match selectors with
   | [] => isTrue (by
@@ -422,34 +426,116 @@ def dec_selector_values_bound (vars : Vars) (selectors : List (String × String)
 
 instance (vars : Vars) (selectors : List (String × String)) : Decidable (selector_values_bound vars selectors) := dec_selector_values_bound vars selectors
 
-inductive UnsafeTemplatedInstantVector (vars : Vars) : InstantVectorType → Type where
-| selector (selectors: List (String × String)) (listeral_selector: List (String × String)) : UnsafeTemplatedInstantVector vars vector
-| add_vector (x y : UnsafeTemplatedInstantVector vars vector) : UnsafeTemplatedInstantVector vars vector
+def LabelName := String
+def LabelValue := String
+def VarRef := String
+
+/-- A version of promql that allows the use of variables. The variables can be of the wrong type or not defined at all, hence unsafe. -/
+inductive UnsafeTemplatedInstantVector : InstantVectorType → Type where
+/-- TODO: Should we allow selectors in any order by having a top-level list which can contain all the possible selectors. -/
+| selector (value_vars: List (LabelName × VarRef)) (literal_equal_selectors: List (LabelName × LabelValue)) (key_value_vars: List VarRef) : UnsafeTemplatedInstantVector vector
+/-- For simplicity, we can have an operator enum instead of having each operator as a constructor. -/
+| add_vector (x y : UnsafeTemplatedInstantVector vector) : UnsafeTemplatedInstantVector vector
 
 -- TODO: Should we build up the variables as they are added (and merge if we combine them and proving that they don't collide) or define them upfront?
 -- Then we always get the minimal set.
 -- How do we build up the type? Is there a better inspiration than vector?
 -- What data structure can be used to to build vars, that guarantees that each name is only of at most one type?
+--
+-- The COQ book has an example on simple lambda with type variables.
 inductive TemplatedInstantVector (vars : Vars) : InstantVectorType → Type where
-| selector (selectors: List (String × String)) (h : ∀ h, h ∈ selectors → vars h.snd = .some .label_value) (listeral_selector: List (String × String))  : TemplatedInstantVector vars vector
+| selector (selectors: List (String × String)) (h : selector_values_bound vars selectors) (literal_selector: List (String × String)) (key_value_vars: List String) /-(h₂: ∀ x, x ∈ key_value_vars → vars x = .some .key_value_pairs)-/ : TemplatedInstantVector vars vector
 | add_vector (x y : TemplatedInstantVector vars vector) : TemplatedInstantVector vars vector
 
 
 namespace TemplatedInstantVector
-  def check {t : InstantVectorType} (vars : Vars) (x : UnsafeTemplatedInstantVector vars t) : Option (TemplatedInstantVector vars t) := match x with
-  | .selector selectors lit => match dec_selector_values_bound vars selectors with
-      | isTrue h => .some $ .selector selectors h lit
+  def check {t : InstantVectorType} (vars : Vars) (x : UnsafeTemplatedInstantVector t) : Option (TemplatedInstantVector vars t) := match x with
+  | .selector selectors lit key_values_vars => match dec_selector_values_bound vars selectors with
+      | isTrue h => .some $ .selector selectors h lit key_values_vars
       | isFalse _ => .none
   | .add_vector x y => match check vars x, check vars y with
       | .none, _ => .none
       | _, .none => .none
       | .some a, .some b => .some $ .add_vector a b
 
-  -- TODO: function to build up vars automatically
+  def noVar : Vars := (fun _ => .none)
+
+  theorem x : selector_values_bound noVar [] := by
+    unfold selector_values_bound
+    intro vars h
+    cases h
+
+  -- TODO: Can decidecidable equality of options be derived?
+  def dec_option {α : Type} [DecidableEq α] (a b : Option α) : Decidable (a = b) := match a, b with
+  | .none, .some x => isFalse (by
+      intro h
+      cases h
+    )
+  | .some x, .none => isFalse (by
+      intro h
+      cases h
+    )
+  | .none, .none => .isTrue rfl
+  | .some x, .some y => if h₁ : x = y
+    then .isTrue (by
+      rw [h₁]
+    )
+    else .isFalse (by
+      intro h₂
+      cases h₂
+      apply h₁
+      rfl
+    )
+
+
+  instance {α : Type} [DecidableEq α] (a b : Option α) : Decidable (a = b) := dec_option a b
+
+  def build_vars_for_selector (selectors : List (String × String)) : Option $ Σ' vars: Vars, selector_values_bound vars selectors := match selectors with
+  | [] => .some ⟨noVar, x⟩
+  | x :: xs => match build_vars_for_selector xs with
+    | .none => .none
+    | .some ⟨vars, h⟩ =>
+      -- hh : vars already contains the variable that is used in X and has the correct type.
+      if hh : vars x.snd = .some .label_value then
+        have : selector_values_bound vars (x :: xs) := by
+          unfold selector_values_bound
+          intro s s_mem
+          cases s_mem with
+          | head => exact hh
+          | tail _ s_mem => apply h s s_mem
+        .some ⟨vars, this⟩
+      else if vars x.snd = .none then (
+      -- hhh : x references a variable that is not yet used in vars, so we need to add it
+        -- with the addition of x all selector are still bound properly
+        have : selector_values_bound (fun z => if x.snd = z then .some .label_value else vars z) (x :: xs) := by
+          unfold selector_values_bound
+          intro y y_in
+          cases y_in with
+          | head => simp
+          | tail _ y_in_xs =>
+            unfold selector_values_bound at h
+            have hhhh := h y y_in_xs
+            rw [←hhhh]
+            simp
+        .some ⟨fun y => if x.snd = y then .some .label_value else vars y, this⟩
+      ) else .none
+
+  def ofUnsafe (x : UnsafeTemplatedInstantVector t) : Option (Σ vars : Vars, TemplatedInstantVector vars t) := match x with
+  | .selector selectors literal_selectors key_value_vars => match build_vars_for_selector selectors with
+    | .none => .none
+    | .some ⟨vars, bound⟩ => .some ⟨vars, .selector selectors bound literal_selectors key_value_vars⟩
+  | .add_vector a b => match ofUnsafe a, ofUnsafe b with
+    | .none, _ => .none
+    | _, .none => .none
+    | .some ⟨aVars, a'⟩, some ⟨bVars, b'⟩ => sorry --how do we decide whether aVars and bVars are compatible? We can identify all variables in a' and b'. All variables only used in either is non-colliding. If the are both used we can check that their types are equal.
+
+  -- TODO: there are no unused variables produced by build_vars_for_selector
+  --theorem build_vars_for_selector_optimal
+
   -- TODO: syntax for templated promQL
 
   def toString {vars : String → Option TemplateVariableType} {t: InstantVectorType} (v: TemplatedInstantVector vars t) : String := match v with
-    | .selector sls _ lits => let sls' := sls.map (λs => s.fst ++ "=\"$" ++ s.snd ++ "\"")
+    | .selector sls _ lits _ => let sls' := sls.map (λs => s.fst ++ "=\"$" ++ s.snd ++ "\"")
         let lits' := lits.map (λl => l.fst ++ "=\"" ++ l.snd ++ "\"")
         "{" ++ (joinSep (sls' ++ lits') ", ") ++ "}"
     | .add_vector x y => s!"{toString x} + {toString y}"
@@ -458,11 +544,8 @@ namespace TemplatedInstantVector
     toString := (fun v => v.toString)
   }
 
-  def noVar : String → Option TemplateVariableType := (fun _ => .none)
-  def sampleVars : String → Option TemplateVariableType := (fun x => if x = "schedule" then .some .label_value else .none)
-
   #eval check (λ x => match x with
     | "instance" => .some .label_value
     | _ => .none
-  ) (.add_vector (.selector [⟨"instance", "instance"⟩] [⟨"operation", "get"⟩]) (.selector [⟨"instance", "instance"⟩] [⟨"operation", "list"⟩]))
+  ) (.add_vector (.selector [⟨"instance", "instance"⟩] [⟨"operation", "get"⟩] []) (.selector [⟨"instance", "instance"⟩] [⟨"operation", "list"⟩] []))
 end TemplatedInstantVector

@@ -4,27 +4,10 @@ import AwesomeDashboards.Prometheus
 open InstantVectorType
 
 structure GraphPanel {e : Environment} where
-  promql : TypesafeInstantVector .vector e
+  promql : TypesafeInstantVector .vector e ⊕ UnsafeTemplatedInstantVector .vector
   legendFormat : Option String := .none
-  deriving Lean.ToJson
 
 def evalGraph' {e : Environment} (g : @GraphPanel e) (res : Nat) (endd : Nat) (steps : Nat) := ""
-
-def graphData := "
-
-"
-
-def graphToHTML {e : Environment} (g : @GraphPanel e) := s!"
-<div>
-  <h3>GraphPanel: {g.promql.v.toString}</h3>
-  <div style=\"height: 300px; width: 100%\">
-    <canvas id=\"myChart\"></canvas>
-  </div>
-  <script>
-    {graphData}
-  </script>
-</div>
-"
 
 structure Column (e : Environment) where
 name : String
@@ -52,7 +35,7 @@ def prometheusQueryInstant (v : InstantVector vector) : IO (List InstantValue) :
   ]
 
 -- def rowsToMap (t : TablePanel) : Std.HashMapImp → List InstantValue
--- | idx, (row :: rows) => 
+-- | idx, (row :: rows) =>
 
 -- def TablePanel.columnsToRows_aux (t : TablePanel) : Nat → (List (List InstantValue)) → Std.HashMapImp String Nat → (List (List InstantValue))
 -- | i, (col :: cols), idx => columnsToRows_aux t (i+1) cols (idx.insert (t.columns.get! i).index_label col)
@@ -63,14 +46,11 @@ def prometheusQueryInstant (v : InstantVector vector) : IO (List InstantValue) :
 inductive Panel {e : Environment}
 | graph (g : @GraphPanel e)
 | table (t : TablePanel e)
-deriving Lean.ToJson
 
 structure Row (e : Environment) where
   panels : List $ @Panel e
   height := 10
-  deriving Lean.ToJson
 
 structure Dashboard (e : Environment) where
   name : String
   panels : List $ Row e
-  deriving Lean.ToJson
