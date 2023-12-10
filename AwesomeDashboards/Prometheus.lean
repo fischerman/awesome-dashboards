@@ -43,7 +43,7 @@ structure Exporter where
 metrics : List Metric
 deriving Lean.FromJson, Lean.ToJson
 
--- The resulting labels of the scrape is a combination of target labels and metric labels. 
+-- The resulting labels of the scrape is a combination of target labels and metric labels.
 -- Prometheus has a config "honor_labels" which deals with conflict.
 -- We do not implement this faithful.
 structure ScrapeConfig where
@@ -55,7 +55,7 @@ def name_label := "__name__"
 
 namespace ScrapeConfig
 
-  def labels (s : ScrapeConfig) (name: String) : Option $ List String := 
+  def labels (s : ScrapeConfig) (name: String) : Option $ List String :=
     Option.map (fun v => s.targetLabels ++ v.labels ++ ["job", "instance", name_label]) (s.exporter.metrics.find? (fun m => m.name == name))
 
 end ScrapeConfig
@@ -69,7 +69,7 @@ inductive VectorMatching
   | on
   deriving Lean.FromJson, Lean.ToJson
 
-inductive AggregationSelector 
+inductive AggregationSelector
   | by (labels : List String)
   | without (labels : List String)
   deriving Lean.FromJson, Lean.ToJson
@@ -121,7 +121,7 @@ inductive InstantVectorType
 open InstantVectorType
 
 /--
-  This has to be an indexed family because "InstantVector scalar" depends on "InstantVecot vector" and vice versa (see scalar()). 
+  This has to be an indexed family because "InstantVector scalar" depends on "InstantVecot vector" and vice versa (see scalar()).
   Moreover both types are valid "entrypoints" for a query.
 -/
 inductive InstantVector : InstantVectorType → Type
@@ -133,7 +133,7 @@ inductive InstantVector : InstantVectorType → Type
   | topk (a : Option AggregationSelector) (k : Nat) (v : InstantVector vector) : InstantVector vector
   | rate (r : RangeVector) : InstantVector vector
   | label_replace (v : InstantVector vector) (dst replacement src regex : String) : InstantVector vector
-  | time : InstantVector scalar 
+  | time : InstantVector scalar
   deriving Lean.ToJson
 
 namespace InstantVector
@@ -144,7 +144,7 @@ namespace InstantVector
     | (label_replace v dst replace src regex) => s!"label_replace({v.toString}, \"{dst}\", \"{replace}\", \"{src}\", \"{regex}\")"
     | (rate r) => s!"rate({r.to_string})"
     | (sub_vector vm a b) => s!"{a.toString} - {b.toString}"
-    | (.sum a v) => 
+    | (.sum a v) =>
         let a' := Option.getD (a.map (·.toString)) ""
         s!"sum {a'} ({v.toString})"
     | _ => ""
@@ -152,7 +152,7 @@ namespace InstantVector
   inductive Subterm : {t t' : InstantVectorType} →  InstantVector t → InstantVector t' → Prop where
     | sub_vector_left {t : InstantVectorType} {vm : Option VectorMatching} {a b : InstantVector vector} {x : InstantVector t} : Subterm x a → Subterm x (.sub_vector vm a b)
     | sub_vector_right {t : InstantVectorType} {vm : Option VectorMatching} {a b : InstantVector vector} {x : InstantVector t} : Subterm x b → Subterm x (.sub_vector vm a b)
-    --| add_scalar_left_scalar : Subterm 
+    --| add_scalar_left_scalar : Subterm
     | refl {t : InstantVectorType} (x : InstantVector t) : Subterm x x
 
   example : Subterm (.selector [] 0) (.sub_vector .none (.sub_vector .none (.selector [] 0) (.selector [] 1)) (.selector [] 1)) := by repeat constructor
@@ -181,7 +181,7 @@ theorem subterm_typesafe {e : Environment} {t t' : InstantVectorType} (v : Insta
   unfold InstantVector.typesafe
   sorry
   -- induction v'
-    
+
 
 
 structure TypesafeInstantVector (t : InstantVectorType) (e : Environment) where
@@ -204,7 +204,7 @@ namespace TypesafeInstantVector
       )
       | .label_replace v' _ _ _ _ => helpString ⟨v', sorry⟩ -- use subterm_typesafe here
       | _ => ""
-  
+
   def labels : {t : InstantVectorType} → TypesafeInstantVector t e → List String
   | t, ⟨v, h⟩ => match v with
     | .selector lms _ => (match LabelMatcher.getMatchedName lms with
@@ -214,11 +214,11 @@ namespace TypesafeInstantVector
     | .literal v => []
     -- We want to use h as evidence to retrieve the labels
     | .add_scalar_left a b => labels ⟨b, sorry⟩
-    /- label_replace might or might not create a new label. 
+    /- label_replace might or might not create a new label.
     The the current implementation we can't know whether the regex will match, so we always add the new label.
-    If the label was already present then it is now present twice... 
+    If the label was already present then it is now present twice...
     -/
-    | .label_replace v dst repl src reg => dst :: labels ⟨v, sorry⟩ 
+    | .label_replace v dst repl src reg => dst :: labels ⟨v, sorry⟩
     /- Any operation on a range vectors will remove the label __name__ -/
     | _ => []
 
@@ -265,7 +265,7 @@ open Lean.Parser
 open Lean.PrettyPrinter
 
 def name : Parser := withAntiquot (mkAntiquot "name" `LX.text) {
-  fn := fun c s => 
+  fn := fun c s =>
     let startPos := s.pos;
     let s := takeWhile1Fn (fun c => c.isAlphanum || "_".contains c) "Invalid name" c s;
     mkNodeToken `LX.text startPos c s
@@ -279,9 +279,9 @@ syntax name "=" strLit : labelmatcher
 macro_rules
 | `(labelmatcher| $key:name=$value) => `(LabelMatcher.equal $(quote key.raw[0].getAtomVal) $value)
 
--- 
+--
 declare_syntax_cat labelmatchers
--- The parser 
+-- The parser
 syntax "{" labelmatcher,* "}" : labelmatchers
 -- See https://github.com/leanprover/lean4/pull/1251/commits/9eff6572334a40f671928400614309455c76ef38#diff-52ef0c67eea613acf6c0b6284063fd7112cdd40750de38365c214abaef246db4R1854
 -- TODO: Remove this workaround
@@ -358,36 +358,39 @@ def bytes_receives_templated_with_rate_window (rate_window : Nat) : InstantVecto
 
 inductive TemplateVariableType
 | label_value
+| key_value_pairs
 
 def Vars := String → Option TemplateVariableType
 
-def decP (vars : Vars) (x : String × String) : Decidable (vars x.snd = some TemplateVariableType.label_value) :=
+def dec_selector_value_bound (vars : Vars) (x : String × String) : Decidable (vars x.snd = some TemplateVariableType.label_value) :=
   match vars x.snd with
   | .none => isFalse (by
         intro
         contradiction
       )
+  | .some .key_value_pairs => isFalse (by
+        intro h
+        cases h
+      )
   | .some TemplateVariableType.label_value => isTrue rfl
 
-instance (vars : Vars) (x : String × String) : Decidable (vars x.snd = some TemplateVariableType.label_value) := decP vars x 
+instance (vars : Vars) (x : String × String) : Decidable (vars x.snd = some TemplateVariableType.label_value) := dec_selector_value_bound vars x
 
-def t (vars : Vars) (selectors : List (String × String)) := ∀ h, h ∈ selectors → vars h.snd = .some .label_value
+def selector_values_bound (vars : Vars) (selectors : List (String × String)) := ∀ h, h ∈ selectors → vars h.snd = .some .label_value
 
-def decT (vars : Vars) (selectors : List (String × String)) : Decidable (t vars selectors) :=
+def dec_selector_values_bound (vars : Vars) (selectors : List (String × String)) : Decidable (selector_values_bound vars selectors) :=
   match selectors with
-  | [] => isTrue (by 
-      unfold t
+  | [] => isTrue (by
+      unfold selector_values_bound
       intro s hs
       cases hs
     )
   | x :: xs => if h : vars x.snd = .some .label_value then (by
-    unfold t
-    have tt := decT vars xs
     -- How do I split Decidable on a list into head and tail
-    cases tt with
+    match dec_selector_values_bound vars xs with
     | isTrue z => {
-      unfold t at z
       apply isTrue
+      unfold selector_values_bound at z
       intro hh
       intro hhh
       cases hhh with
@@ -403,24 +406,24 @@ def decT (vars : Vars) (selectors : List (String × String)) : Decidable (t vars
       apply isFalse
       intro hh
       apply z
-      unfold t
+      unfold selector_values_bound
       intro hhh
       intro hhhh
       apply hh
       apply List.Mem.tail
       exact hhhh
     }
-  ) else isFalse (by 
-    unfold t
+  ) else isFalse (by
+    unfold selector_values_bound
     intro hh
     have hhh := hh x (List.Mem.head _)
     contradiction
   )
 
-instance (vars : Vars) (selectors : List (String × String)) : Decidable (t vars selectors) := decT vars selectors
+instance (vars : Vars) (selectors : List (String × String)) : Decidable (selector_values_bound vars selectors) := dec_selector_values_bound vars selectors
 
 inductive UnsafeTemplatedInstantVector (vars : Vars) : InstantVectorType → Type where
-| selector (selectors: List (String × String)) : UnsafeTemplatedInstantVector vars vector
+| selector (selectors: List (String × String)) (listeral_selector: List (String × String)) : UnsafeTemplatedInstantVector vars vector
 | add_vector (x y : UnsafeTemplatedInstantVector vars vector) : UnsafeTemplatedInstantVector vars vector
 
 -- TODO: Should we build up the variables as they are added (and merge if we combine them and proving that they don't collide) or define them upfront?
@@ -428,14 +431,14 @@ inductive UnsafeTemplatedInstantVector (vars : Vars) : InstantVectorType → Typ
 -- How do we build up the type? Is there a better inspiration than vector?
 -- What data structure can be used to to build vars, that guarantees that each name is only of at most one type?
 inductive TemplatedInstantVector (vars : Vars) : InstantVectorType → Type where
-| selector (selectors: List (String × String)) (h : ∀ h, h ∈ selectors → vars h.snd = .some .label_value) : TemplatedInstantVector vars vector
+| selector (selectors: List (String × String)) (h : ∀ h, h ∈ selectors → vars h.snd = .some .label_value) (listeral_selector: List (String × String))  : TemplatedInstantVector vars vector
 | add_vector (x y : TemplatedInstantVector vars vector) : TemplatedInstantVector vars vector
 
 
 namespace TemplatedInstantVector
   def check {t : InstantVectorType} (vars : Vars) (x : UnsafeTemplatedInstantVector vars t) : Option (TemplatedInstantVector vars t) := match x with
-  | .selector selectors => match decT vars selectors with
-      | isTrue h => .some $ .selector selectors h
+  | .selector selectors lit => match dec_selector_values_bound vars selectors with
+      | isTrue h => .some $ .selector selectors h lit
       | isFalse _ => .none
   | .add_vector x y => match check vars x, check vars y with
       | .none, _ => .none
@@ -443,9 +446,12 @@ namespace TemplatedInstantVector
       | .some a, .some b => .some $ .add_vector a b
 
   -- TODO: function to build up vars automatically
+  -- TODO: syntax for templated promQL
 
   def toString {vars : String → Option TemplateVariableType} {t: InstantVectorType} (v: TemplatedInstantVector vars t) : String := match v with
-    | .selector sls h => "{" ++ joinSep (sls.map (λs => s.fst ++ "=\"$" ++ s.snd ++ "\"")) "," ++ "}"
+    | .selector sls _ lits => let sls' := sls.map (λs => s.fst ++ "=\"$" ++ s.snd ++ "\"")
+        let lits' := lits.map (λl => l.fst ++ "=\"" ++ l.snd ++ "\"")
+        "{" ++ (joinSep (sls' ++ lits') ", ") ++ "}"
     | .add_vector x y => s!"{toString x} + {toString y}"
 
   instance {vars : String → Option TemplateVariableType} {t: InstantVectorType} : ToString (TemplatedInstantVector vars t) := {
@@ -458,5 +464,5 @@ namespace TemplatedInstantVector
   #eval check (λ x => match x with
     | "instance" => .some .label_value
     | _ => .none
-  ) (.add_vector (.selector [⟨"instance", "instance"⟩]) (.selector [⟨"instance", "instance"⟩]))
+  ) (.add_vector (.selector [⟨"instance", "instance"⟩] [⟨"operation", "get"⟩]) (.selector [⟨"instance", "instance"⟩] [⟨"operation", "list"⟩]))
 end TemplatedInstantVector
