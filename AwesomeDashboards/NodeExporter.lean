@@ -54,7 +54,7 @@ def myPrometheusEnv : Environment := {
 
 #eval InstantVector.typesafe v myPrometheusEnv
 
-example : InstantVector.typesafe (InstantVector.selector lm 0) myPrometheusEnv := by simp
+example : InstantVector.typesafe (InstantVector.selector lm 0) myPrometheusEnv := by eq_refl
 
 def avail_bytes : InstantVector InstantVectorType.vector := [pql| node_filesystem_avail_bytes-node_filesystem_avail_bytes]
 #eval unitOf myPrometheusEnv avail_bytes

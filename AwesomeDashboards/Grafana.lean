@@ -55,15 +55,15 @@ structure GrafanaPanelSeriesToColumnsOptions where
   byField: String
   deriving Lean.ToJson, Lean.FromJson
 
-instance : Lean.ToJson $ Lean.HashMap String Bool where
+instance : Lean.ToJson $ Std.HashMap String Bool where
   toJson := fun m => Lean.Json.mkObj $ m.toList.map (fun e => ⟨e.1, e.2⟩)
 
-instance : Lean.ToJson $ Lean.HashMap String String where
+instance : Lean.ToJson $ Std.HashMap String String where
   toJson := fun m => Lean.Json.mkObj $ m.toList.map (fun e => ⟨e.1, e.2⟩)
 
 structure GrafanaPanelOrganizeOptions where
-  excludeByName: Lean.HashMap String Bool
-  renameByName: Lean.HashMap String String
+  excludeByName: Std.HashMap String Bool
+  renameByName: Std.HashMap String String
   deriving Lean.ToJson
 
 inductive GrafanaPanelTransformation
@@ -87,6 +87,48 @@ structure GrafanaPanel where
   transformations : Option $ List GrafanaPanelTransformation := .none
   deriving Lean.ToJson
 
+inductive GrafanaTemplatingRefresh
+/-- 1 -/
+| onDashboardLoad
+/-- 2 -/
+| onTimeRangeChange
+
+instance : Lean.ToJson GrafanaTemplatingRefresh where
+  toJson := fun t => match t with
+  | .onDashboardLoad => 1
+  | .onTimeRangeChange => 2
+
+inductive GrafanaTemplatingQueryType
+| query
+
+instance : Lean.ToJson GrafanaTemplatingQueryType where
+  toJson := fun t => match t with
+  | .query => 3
+
+structure GrafanaTemplatingQuery where
+  qryType: GrafanaTemplatingQueryType
+  deriving Lean.ToJson
+
+
+/-- Only  -/
+structure GrafanaTemplatingVariable where
+  datasource: GrafanaPanelDatasource
+  description: String
+  /-- Whether an option is to include all. -/
+  includeAll: Bool
+  /-- Whether multiple values can be selected at the same time. -/
+  multi: Bool
+  /-- Optional display name. -/
+  label: Option String
+  name: String
+  regex: String
+  query: GrafanaTemplatingQuery
+  refresh: GrafanaTemplatingRefresh
+  deriving Lean.ToJson
+
+structure GrafanaTemplating where
+  list: List GrafanaTemplatingVariable
+  deriving Lean.ToJson
 
 structure GrafanaDashboard where
   id: Option String
@@ -95,6 +137,7 @@ structure GrafanaDashboard where
   tags: List String
   schemaVersion: Nat
   panels: List GrafanaPanel
+  templating: Option GrafanaTemplating := .none
   deriving  Lean.ToJson
 
 def myDatasource : GrafanaPanelDatasource := { type := "prometheus", uid := "OoN46punz" }
@@ -187,7 +230,7 @@ def panelToGrafanaPanel {e : Environment} (p : @Panel e) (pos : GrafanaPanelGrid
       transformations := .some [
         .seriesToColumns { byField := t.joinLabel },
         .organize {
-          excludeByName := Lean.HashMap.ofList $ (
+          excludeByName := Std.HashMap.ofList $ (
             if t.columns.length = 1 then
               [⟨"Time", true⟩]
             else
@@ -200,7 +243,7 @@ def panelToGrafanaPanel {e : Environment} (p : @Panel e) (pos : GrafanaPanelGrid
             else
               List.foldl (·++·) [] $ mapI (fun c i => List.map (⟨s!"{·} {i+1}", true⟩) $ c.promql.labels.filter (not ∘ (c.additionalLabels.contains ·))) 0 t.columns
           ),
-          renameByName := Lean.HashMap.ofList (
+          renameByName := Std.HashMap.ofList (
             if h: t.columns.length = 1 then
               let h' : 0 < List.length t.columns := by simp[h];
               [⟨"Value", (t.columns[0]).name⟩]

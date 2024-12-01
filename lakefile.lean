@@ -2,11 +2,11 @@ import Lake
 import Init.System.IO
 open Lake DSL
 
-package «awesome-dashboards» {
+package AwesomeDashboards {
   -- add configuration options here
 }
 
-lean_lib «awesome-dashboards»
+lean_lib AwesomeDashboards
 
 @[default_target]
 lean_exe dashboard {

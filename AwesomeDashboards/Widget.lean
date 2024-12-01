@@ -1,7 +1,7 @@
 import Lean
 open Lean Widget
 
-@[widget]
+--@[widget]
 def dashboardWidget : UserWidgetDefinition where
   name := "Hello"
   javascript := "
@@ -12,4 +12,3 @@ Name: ${props.name}
 Panels: ${props.panels.length}
       `)
     }"
-

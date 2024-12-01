@@ -29,7 +29,7 @@ def myDashboard : Dashboard myPrometheusEnv := { name := "My Dashboard", panels 
   ]
 }]}
 
-#eval (⟨[pql| label_replace(node_filesystem_avail_bytes{}, "new", "$1-xyz", "job", "(.*)") ], by simp⟩ : TypesafeInstantVector .vector myPrometheusEnv).labels
+-- #eval (⟨[pql| label_replace(node_filesystem_avail_bytes{}, "new", "$1-xyz", "job", "(.*)") ], by eq_refl⟩ : TypesafeInstantVector .vector myPrometheusEnv).labels
 
 def main : IO Unit := do
   IO.print $ Lean.toJson $ dashboardToGrafana myDashboard

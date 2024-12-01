@@ -152,7 +152,8 @@ namespace InstantVector
   inductive Subterm : {t t' : InstantVectorType} →  InstantVector t → InstantVector t' → Prop where
     | sub_vector_left {t : InstantVectorType} {vm : Option VectorMatching} {a b : InstantVector vector} {x : InstantVector t} : Subterm x a → Subterm x (.sub_vector vm a b)
     | sub_vector_right {t : InstantVectorType} {vm : Option VectorMatching} {a b : InstantVector vector} {x : InstantVector t} : Subterm x b → Subterm x (.sub_vector vm a b)
-    --| add_scalar_left_scalar : Subterm
+    | add_scalar_left_vector {x : InstantVector vector} {a : InstantVector scalar} : Subterm x (.add_scalar_left a x)
+    | label_replace {dst replacement src regex : String} : Subterm x (.label_replace x dst replacement src regex)
     | refl {t : InstantVectorType} (x : InstantVector t) : Subterm x x
 
   example : Subterm (.selector [] 0) (.sub_vector .none (.sub_vector .none (.selector [] 0) (.selector [] 1)) (.selector [] 1)) := by repeat constructor
@@ -175,18 +176,56 @@ def typeSafeSelector (lms : List LabelMatcher) (e : Environment) : Bool := match
 def InstantVector.typesafe {t : InstantVectorType} (v : InstantVector t) (e : Environment) : Bool := match v with
   | (InstantVector.selector lm offset) => typeSafeSelector lm e
   | (InstantVector.sub_vector _ a b) => typesafe a e && typesafe b e
+
   | _ => true
 
-theorem subterm_typesafe {e : Environment} {t t' : InstantVectorType} (v : InstantVector t) (v' : InstantVector t') (h : InstantVector.Subterm v v') (h' : v'.typesafe e) : v.typesafe e := by
-  unfold InstantVector.typesafe
+theorem subterm_typesafe {e : Environment} {t t' : InstantVectorType} (v : InstantVector t) (v' : InstantVector t') (h : v.Subterm v') (h' : v'.typesafe e) : v.typesafe e := by
+  --unfold InstantVector.typesafe
+  induction v'
+  case literal => (
+    cases h
+    eq_refl
+  )
+  case selector lms offset => (
+    cases h
+    rewrite [<-h']
+    eq_refl
+  )
+  case sub_vector vm a b a_ih b_ih => (
+    cases h with
+    | sub_vector_left h'' =>
+      apply a_ih
+      apply h''
+      unfold InstantVector.typesafe at h'
+      rewrite [Bool.and_eq_true] at h'
+      cases h'
+      assumption
+    | sub_vector_right h'' =>
+      apply b_ih
+      apply h''
+      unfold InstantVector.typesafe at h'
+      rewrite [Bool.and_eq_true] at h'
+      cases h'
+      assumption
+    | refl =>
+      assumption
+  )
+  case time => (
+    cases h
+    assumption
+  )
+  case label_replace v dst replacement src regex ih => (
+    sorry -- Do we need to generalize inducation to make this case work?
+  )
   sorry
-  -- induction v'
-
+  sorry
+  sorry
+  sorry
 
 
 structure TypesafeInstantVector (t : InstantVectorType) (e : Environment) where
   v : InstantVector t
-  h : InstantVector.typesafe v e := by simp
+  h : InstantVector.typesafe v e := by eq_refl
 
 namespace TypesafeInstantVector
   variable {t : InstantVectorType} {e : Environment}
@@ -205,6 +244,9 @@ namespace TypesafeInstantVector
       | .label_replace v' _ _ _ _ => helpString ⟨v', sorry⟩ -- use subterm_typesafe here
       | _ => ""
 
+  /--
+    Returns the keys of the labels of the query.
+  -/
   def labels : {t : InstantVectorType} → TypesafeInstantVector t e → List String
   | t, ⟨v, h⟩ => match v with
     | .selector lms _ => (match LabelMatcher.getMatchedName lms with
@@ -213,12 +255,12 @@ namespace TypesafeInstantVector
       )
     | .literal v => []
     -- We want to use h as evidence to retrieve the labels
-    | .add_scalar_left a b => labels ⟨b, sorry⟩
+    | .add_scalar_left a b => labels ⟨b, subterm_typesafe b (.add_scalar_left a b) (InstantVector.Subterm.add_scalar_left_vector) h⟩
     /- label_replace might or might not create a new label.
     The the current implementation we can't know whether the regex will match, so we always add the new label.
     If the label was already present then it is now present twice...
     -/
-    | .label_replace v dst repl src reg => dst :: labels ⟨v, sorry⟩
+    | .label_replace v dst repl src reg => dst :: labels ⟨v, subterm_typesafe v (.label_replace v dst repl src reg) (InstantVector.Subterm.label_replace) h⟩
     /- Any operation on a range vectors will remove the label __name__ -/
     | _ => []
 
@@ -234,9 +276,6 @@ instance {t : InstantVectorType} : Repr $ InstantVector t where
   reprPrec v _ := InstantVector.toString v
 
 #eval InstantVector.rate (RangeVector.selector [.equal "instance" "test"] 5)
-
-def Option.get : (a : Option α) → a.isSome → α
-  | some a, _ => a
 
 def getMetricDef? (e : Environment) (lms : List LabelMatcher) : Option Metric := match LabelMatcher.getMatchedName lms with
   | (Option.some name) => (e.scrapeConfigs.findSome? (fun c => c.exporter.metrics.find? (λm => m.name = name)))
@@ -357,7 +396,7 @@ def up_templated_with_job (job: String) : InstantVector .vector := InstantVector
 def bytes_receives_templated_with_rate_window (rate_window : Nat) : InstantVector .vector := InstantVector.rate $ RangeVector.selector [.equal name_label "node_network_receive_bytes_total"] rate_window
 
 inductive TemplateVariableType
-  /-- A variable that can be used for a label value. -/
+   /-- A variable that can be used for a label value. -/
 | label_value
   /-- A variable that can be used in a selector representing a list of labels pairs. -/
 | key_value_pairs
