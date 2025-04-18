@@ -18,9 +18,8 @@ def handleHover (p : HoverParams)
   let doc ← readDoc
   let text := doc.meta.text
   let leanHoverPos := text.lspPosToUtf8Pos p.position
-  -- TODO: find a way to capture the correct scope
+  -- TODO: find a way to capture the correct scope, i.e. find out where the token starts and end.
   bindWaitFindSnap doc (fun snap => snap.endPos > leanHoverPos) (notFoundX := pure prev) fun snap => do
-    
     return Task.pure $ .ok $ .some {
       contents := {
         kind := .plaintext

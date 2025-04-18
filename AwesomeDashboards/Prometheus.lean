@@ -1,5 +1,7 @@
 import Lean
 
+set_option linter.unusedVariables false
+
 def joinSep (s : List String) (sep : String) : String := match s with
 | [] => ""
 | x::[] => x
@@ -20,6 +22,10 @@ inductive MetricUnit
 | bool
 | time
 | unitless
+/--
+  div is the result of a devision where dividend and devisor have different units.
+  The result of rate() is a div where the devisor unit is seconds.
+ -/
 | div (dividend devisor : MetricUnit)
 deriving Repr, BEq, DecidableEq, Lean.FromJson, Lean.ToJson
 
@@ -150,11 +156,13 @@ namespace InstantVector
     | _ => ""
 
   inductive Subterm : {t t' : InstantVectorType} →  InstantVector t → InstantVector t' → Prop where
+    | refl {t : InstantVectorType} (x : InstantVector t) : Subterm x x
     | sub_vector_left {t : InstantVectorType} {vm : Option VectorMatching} {a b : InstantVector vector} {x : InstantVector t} : Subterm x a → Subterm x (.sub_vector vm a b)
     | sub_vector_right {t : InstantVectorType} {vm : Option VectorMatching} {a b : InstantVector vector} {x : InstantVector t} : Subterm x b → Subterm x (.sub_vector vm a b)
     | add_scalar_left_vector {x : InstantVector vector} {a : InstantVector scalar} : Subterm x (.add_scalar_left a x)
     | label_replace {dst replacement src regex : String} : Subterm x (.label_replace x dst replacement src regex)
-    | refl {t : InstantVectorType} (x : InstantVector t) : Subterm x x
+    | sum {a : Option AggregationSelector} {v : InstantVector vector} : Subterm v (.sum a v)
+    | topk (a : Option AggregationSelector) (k : Nat) (v : InstantVector vector) : Subterm v (.topk a k v)
 
   example : Subterm (.selector [] 0) (.sub_vector .none (.sub_vector .none (.selector [] 0) (.selector [] 1)) (.selector [] 1)) := by repeat constructor
 end InstantVector
@@ -173,25 +181,31 @@ def typeSafeSelector (lms : List LabelMatcher) (e : Environment) : Bool := match
   ))
 | .none => false
 
+def RangeVector.typesafe (r : RangeVector) (e : Environment) : Bool := match r with
+  | (.selector lms duration) => typeSafeSelector lms e
+
 def InstantVector.typesafe {t : InstantVectorType} (v : InstantVector t) (e : Environment) : Bool := match v with
   | (InstantVector.selector lm offset) => typeSafeSelector lm e
   | (InstantVector.sub_vector _ a b) => typesafe a e && typesafe b e
-
-  | _ => true
+  | (InstantVector.add_scalar_left a b) => typesafe b e
+  | (InstantVector.label_replace v dst replacement src regex) => typesafe v e
+  -- Short coming: The labels of sum don't have to exist.
+  -- Instead of using the environment we need an intermediate state to track what labels are selected.
+  | (InstantVector.sum a v) => typesafe v e
+  | (InstantVector.topk a k v) => typesafe v e
+  | (InstantVector.rate r) => RangeVector.typesafe r e
+  | _ => false
 
 theorem subterm_typesafe {e : Environment} {t t' : InstantVectorType} (v : InstantVector t) (v' : InstantVector t') (h : v.Subterm v') (h' : v'.typesafe e) : v.typesafe e := by
-  --unfold InstantVector.typesafe
   induction v'
-  case literal => (
+  case literal =>
     cases h
-    eq_refl
-  )
-  case selector lms offset => (
+    apply h'
+  case selector lms offset =>
     cases h
     rewrite [<-h']
     eq_refl
-  )
-  case sub_vector vm a b a_ih b_ih => (
+  case sub_vector vm a b a_ih b_ih =>
     cases h with
     | sub_vector_left h'' =>
       apply a_ih
@@ -209,19 +223,33 @@ theorem subterm_typesafe {e : Environment} {t t' : InstantVectorType} (v : Insta
       assumption
     | refl =>
       assumption
-  )
-  case time => (
+  case time =>
     cases h
     assumption
-  )
-  case label_replace v dst replacement src regex ih => (
-    sorry -- Do we need to generalize inducation to make this case work?
-  )
-  sorry
-  sorry
-  sorry
-  sorry
-
+  case label_replace v dst replacement src regex ih =>
+    cases h
+    case refl =>
+      apply h'
+    case label_replace =>
+      apply h'
+  case add_scalar_left a b iha ihb =>
+    cases h
+    case refl =>
+      apply h'
+    case add_scalar_left_vector =>
+      apply h'
+  case sum sel v' ih =>
+    cases h
+    case refl | sum =>
+      apply h'
+  case topk =>
+    cases h
+    case refl | topk =>
+      apply h'
+  case rate =>
+    cases h
+    case refl =>
+      apply h'
 
 structure TypesafeInstantVector (t : InstantVectorType) (e : Environment) where
   v : InstantVector t
@@ -241,7 +269,7 @@ namespace TypesafeInstantVector
         | .some v => Option.getD (e.scrapeConfigs.findSome? (fun c => c.exporter.metrics.findSome? (fun m => if m.name == v then m.help else .none))) ""
         | .none => ""
       )
-      | .label_replace v' _ _ _ _ => helpString ⟨v', sorry⟩ -- use subterm_typesafe here
+      | .label_replace v' dst replacement src regex => helpString ⟨v', subterm_typesafe v' (.label_replace v' dst replacement src regex) InstantVector.Subterm.label_replace h⟩
       | _ => ""
 
   /--
@@ -404,6 +432,18 @@ deriving DecidableEq
 
 def Vars := String → Option TemplateVariableType
 
+/--
+  Combines the maps a and b.
+  Variables in a have precendence.
+-/
+def Vars.or (a b : Vars) : Vars := fun n => match a n with
+  | (.some x) => .some x
+  | .none => b n
+
+-- Should this be a bool or a decidable prop?
+-- def no_conflict (a b : Vars) : Bool := _
+def no_conflict (a b : Vars) : Prop := ∀x, a x == b x ∨ a x == .none ∨ b x == .none
+
 def dec_selector_value_bound (vars : Vars) (x : String × String) : Decidable (vars x.snd = some TemplateVariableType.label_value) :=
   match vars x.snd with
   | .none => isFalse (by
@@ -418,9 +458,17 @@ def dec_selector_value_bound (vars : Vars) (x : String × String) : Decidable (v
 
 instance (vars : Vars) (x : String × String) : Decidable (vars x.snd = some TemplateVariableType.label_value) := dec_selector_value_bound vars x
 
+/--
+  Each variable used in the selector is present in vars, i.e. bound.
+  vars may contain variables not used in the selector.
+-/
 def selector_values_bound (vars : Vars) (selectors : List (String × String)) := ∀ h, h ∈ selectors → vars h.snd = .some .label_value
 
--- TODO: Instead of returning Decidable, we can return a wrapper that contains an error message when Decidable is false.
+/--
+  Whether the selector values are by is decidable.
+
+  TODO: Instead of returning Decidable, we can return a wrapper that contains an error message when Decidable is false.
+-/
 def dec_selector_values_bound (vars : Vars) (selectors : List (String × String)) : Decidable (selector_values_bound vars selectors) :=
   match selectors with
   | [] => isTrue (by
@@ -467,13 +515,20 @@ instance (vars : Vars) (selectors : List (String × String)) : Decidable (select
 
 def LabelName := String
 def LabelValue := String
+/-- The name of a variable -/
 def VarRef := String
 
 /-- A version of promql that allows the use of variables. The variables can be of the wrong type or not defined at all, hence unsafe. -/
 inductive UnsafeTemplatedInstantVector : InstantVectorType → Type where
-/-- TODO: Should we allow selectors in any order by having a top-level list which can contain all the possible selectors. -/
+/--
+  value_vars contains eqality selectors where the values are variables.
+  literal_equal_selectors contains equality matchers that don't use variables.
+  key_value_vars contains variables whose content can contain any matchers.
+
+  TODO: Should we allow selectors of different types in any order by having a top-level list which can contain all the possible selectors types?
+-/
 | selector (value_vars: List (LabelName × VarRef)) (literal_equal_selectors: List (LabelName × LabelValue)) (key_value_vars: List VarRef) : UnsafeTemplatedInstantVector vector
-/-- For simplicity, we can have an operator enum instead of having each operator as a constructor. -/
+/-- For simplicity, we could have an operator enum instead of having each operator as a constructor. -/
 | add_vector (x y : UnsafeTemplatedInstantVector vector) : UnsafeTemplatedInstantVector vector
 
 -- TODO: Should we build up the variables as they are added (and merge if we combine them and proving that they don't collide) or define them upfront?
@@ -483,11 +538,20 @@ inductive UnsafeTemplatedInstantVector : InstantVectorType → Type where
 --
 -- The COQ book has an example on simple lambda with type variables.
 inductive TemplatedInstantVector (vars : Vars) : InstantVectorType → Type where
+/-- key_value_vars may be unsafe. -/
 | selector (selectors: List (String × String)) (h : selector_values_bound vars selectors) (literal_selector: List (String × String)) (key_value_vars: List String) /-(h₂: ∀ x, x ∈ key_value_vars → vars x = .some .key_value_pairs)-/ : TemplatedInstantVector vars vector
 | add_vector (x y : TemplatedInstantVector vars vector) : TemplatedInstantVector vars vector
 
+-- If a and b are not conflicting then we can add b to the vars of v.
+def vars_or_left {t : InstantVectorType} {a b : Vars} (v : TemplatedInstantVector a t) (h : no_conflict a b) : TemplatedInstantVector (a.or b) t := sorry
+
+-- If a and b are not conflicting then we can add a to the vars of v.
+def vars_or_right {t : InstantVectorType} {a b : Vars} (v : TemplatedInstantVector b t) (h : no_conflict a b) : TemplatedInstantVector (a.or b) t := sorry
 
 namespace TemplatedInstantVector
+  /--
+    check returns a type-safe vector if all variables in x are bound by vars.
+  -/
   def check {t : InstantVectorType} (vars : Vars) (x : UnsafeTemplatedInstantVector t) : Option (TemplatedInstantVector vars t) := match x with
   | .selector selectors lit key_values_vars => match dec_selector_values_bound vars selectors with
       | isTrue h => .some $ .selector selectors h lit key_values_vars
@@ -529,6 +593,9 @@ namespace TemplatedInstantVector
 
   instance {α : Type} [DecidableEq α] (a b : Option α) : Decidable (a = b) := dec_option a b
 
+  /--
+    From a list of selectors where the values are variable references, this function constructs a map of all used variables and a proof the all variables are bound.
+  -/
   def build_vars_for_selector (selectors : List (String × String)) : Option $ Σ' vars: Vars, selector_values_bound vars selectors := match selectors with
   | [] => .some ⟨noVar, x⟩
   | x :: xs => match build_vars_for_selector xs with
@@ -559,6 +626,10 @@ namespace TemplatedInstantVector
         .some ⟨fun y => if x.snd = y then .some .label_value else vars y, this⟩
       ) else .none
 
+/--
+ofUnsafe goes through x and constructs a map of use variables and the type-safe version of x.
+If variables are colliding then .none is returned.
+-/
   def ofUnsafe (x : UnsafeTemplatedInstantVector t) : Option (Σ vars : Vars, TemplatedInstantVector vars t) := match x with
   | .selector selectors literal_selectors key_value_vars => match build_vars_for_selector selectors with
     | .none => .none
@@ -566,7 +637,12 @@ namespace TemplatedInstantVector
   | .add_vector a b => match ofUnsafe a, ofUnsafe b with
     | .none, _ => .none
     | _, .none => .none
-    | .some ⟨aVars, a'⟩, some ⟨bVars, b'⟩ => sorry --how do we decide whether aVars and bVars are compatible? We can identify all variables in a' and b'. All variables only used in either is non-colliding. If the are both used we can check that their types are equal.
+    -- How do we decide whether aVars and bVars are compatible?
+    -- aVars and bVars are functions, so their domain is infinite and no_conflict is undecidable.
+    -- We probably have to deduce it from the usage in a' and b' or change Vars into a map.
+    | .some ⟨aVars, a'⟩, some ⟨bVars, b'⟩ =>
+        let vars' : Vars := aVars.or bVars
+        .some ⟨vars', .add_vector (vars_or_left a' sorry) (vars_or_right b' sorry)⟩ -- TODO: Use theorems to combine variables. If variables collides returns .none.
 
   -- TODO: there are no unused variables produced by build_vars_for_selector
   --theorem build_vars_for_selector_optimal

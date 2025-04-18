@@ -1,6 +1,8 @@
 import Init.Data
 import AwesomeDashboards.Prometheus
 
+set_option linter.unusedVariables false
+
 open InstantVectorType
 
 structure GraphPanel {e : Environment} where
