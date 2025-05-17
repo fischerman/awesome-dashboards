@@ -14,7 +14,12 @@ inductive MetricType
 | untyped
 deriving Lean.FromJson, Lean.ToJson
 
--- https://prometheus.io/docs/practices/naming/#base-units
+/--
+Units for time series.
+The have no formal meaning in promql and must be derived from the system that emits the metric.
+
+https://prometheus.io/docs/practices/naming/#base-units
+-/
 @[match_pattern]
 inductive MetricUnit
 | seconds
@@ -57,6 +62,12 @@ targetLabels : List String
 exporter : Exporter
 deriving Lean.FromJson, Lean.ToJson
 
+/--
+The label key that contains the metric name.
+up{} is equvilant to {\_\_name\_\_="up"}
+
+https://prometheus.io/docs/prometheus/latest/querying/basics/#instant-vector-selectors
+-/
 def name_label := "__name__"
 
 namespace ScrapeConfig
@@ -70,11 +81,21 @@ structure Environment where
 scrapeConfigs: List ScrapeConfig
 deriving Lean.FromJson, Lean.ToJson
 
+/--
+VectorMatching defines on which labels vectors are matched.
+
+TODO: Add actual label keys. Currently it only determines whether.
+TODO: A vector matcher is optional. By default all labels must match.
+-/
 inductive VectorMatching
   | ignoring
   | on
   deriving Lean.FromJson, Lean.ToJson
 
+/--
+AggregationSelector defines what labels are kept during aggregation.
+https://prometheus.io/docs/prometheus/latest/querying/operators/#aggregation-operators
+-/
 inductive AggregationSelector
   | by (labels : List String)
   | without (labels : List String)
@@ -88,6 +109,13 @@ namespace AggregationSelector
 
 end AggregationSelector
 
+/--
+Label matcher is a single matcher on a time series.
+https://prometheus.io/docs/prometheus/latest/querying/basics/#instant-vector-selectors
+
+Currently on equality matchers are supported.
+TODO: Support inequality and regex matchers.
+-/
 inductive LabelMatcher
 | equal (key : String) (value : String)
 deriving Lean.FromJson, Lean.ToJson
@@ -97,6 +125,7 @@ namespace LabelMatcher
   def toString (kvp : LabelMatcher) := match kvp with
   | (.equal k v) => s!"{k}=\"{v}\""
 
+  /-- Returns the value of the metric name if it exists. Label matchers don't need to select a metric name. -/
   def getMatchedName (lms : List LabelMatcher) : Option String := match lms with
   | ⟨k, v⟩ :: xs => if k == name_label then .some v else getMatchedName xs
   | [] => .none
@@ -127,8 +156,12 @@ inductive InstantVectorType
 open InstantVectorType
 
 /--
+  An instant vector is used to query Prometheus at a point in time.
+
   This has to be an indexed family because "InstantVector scalar" depends on "InstantVecot vector" and vice versa (see scalar()).
   Moreover both types are valid "entrypoints" for a query.
+
+  TODO: Replace specific binary operator constructor with generic once. In most cases the particular operator doesn't matter and it should make proofs easier.
 -/
 inductive InstantVector : InstantVectorType → Type
   | selector (lms : List LabelMatcher) (offset : Nat) : InstantVector vector -- TODO: regex, negative, and proof for minimal label requirements
@@ -155,6 +188,7 @@ namespace InstantVector
         s!"sum {a'} ({v.toString})"
     | _ => ""
 
+  /-- Subterms are terms that are contained in a another term. This is currently not exhaustive and does not contain range vectors. -/
   inductive Subterm : {t t' : InstantVectorType} →  InstantVector t → InstantVector t' → Prop where
     | refl {t : InstantVectorType} (x : InstantVector t) : Subterm x x
     | sub_vector_left {t : InstantVectorType} {vm : Option VectorMatching} {a b : InstantVector vector} {x : InstantVector t} : Subterm x a → Subterm x (.sub_vector vm a b)
@@ -172,7 +206,7 @@ A label matcher is safe when
 - every label that is used exists in combination with all other labels
 
 - currently requires that there is an equlity matcher on the name
-- matches on the any occurence of the metric name in the scrape config. Only one must fit. TODO: Check that all definitions are working.
+- matches on any occurence of the metric name in the scrape config. Only one must fit. TODO: Check that all definitions are working.
 -/
 def typeSafeSelector (lms : List LabelMatcher) (e : Environment) : Bool := match LabelMatcher.getMatchedName lms with
 | (.some v) => Option.isSome $ e.scrapeConfigs.find? (fun c => Option.isSome $ c.exporter.metrics.find? (λ m =>
@@ -196,6 +230,7 @@ def InstantVector.typesafe {t : InstantVectorType} (v : InstantVector t) (e : En
   | (InstantVector.rate r) => RangeVector.typesafe r e
   | _ => false
 
+/-- Any subterm of an type-safe instant vector is also type-safe with respect to the environment. -/
 theorem subterm_typesafe {e : Environment} {t t' : InstantVectorType} (v : InstantVector t) (v' : InstantVector t') (h : v.Subterm v') (h' : v'.typesafe e) : v.typesafe e := by
   induction v'
   case literal =>
@@ -251,6 +286,7 @@ theorem subterm_typesafe {e : Environment} {t t' : InstantVectorType} (v : Insta
     case refl =>
       apply h'
 
+
 structure TypesafeInstantVector (t : InstantVectorType) (e : Environment) where
   v : InstantVector t
   h : InstantVector.typesafe v e := by eq_refl
@@ -289,7 +325,7 @@ namespace TypesafeInstantVector
     If the label was already present then it is now present twice...
     -/
     | .label_replace v dst repl src reg => dst :: labels ⟨v, subterm_typesafe v (.label_replace v dst repl src reg) (InstantVector.Subterm.label_replace) h⟩
-    /- Any operation on a range vectors will remove the label __name__ -/
+    /- Any operation on a range vectors will remove the label \_\_name\_\_ -/
     | _ => []
 
 end TypesafeInstantVector
@@ -542,7 +578,10 @@ inductive TemplatedInstantVector (vars : Vars) : InstantVectorType → Type wher
 | selector (selectors: List (String × String)) (h : selector_values_bound vars selectors) (literal_selector: List (String × String)) (key_value_vars: List String) /-(h₂: ∀ x, x ∈ key_value_vars → vars x = .some .key_value_pairs)-/ : TemplatedInstantVector vars vector
 | add_vector (x y : TemplatedInstantVector vars vector) : TemplatedInstantVector vars vector
 
--- If a and b are not conflicting then we can add b to the vars of v.
+/--
+  If a and b are not conflicting then we can add b to the vars of v.
+  Basically, we can add unused variables.
+-/
 def vars_or_left {t : InstantVectorType} {a b : Vars} (v : TemplatedInstantVector a t) (h : no_conflict a b) : TemplatedInstantVector (a.or b) t := sorry
 
 -- If a and b are not conflicting then we can add a to the vars of v.
