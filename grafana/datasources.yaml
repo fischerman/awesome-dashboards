@@ -13,4 +13,4 @@ datasources:
     # <string> custom UID which can be used to reference this datasource in other parts of the configuration, if not specified will be generated automatically
     uid: OoN46punz
     # <string> url
-    url: http://demo.robustperception.io:9090/
+    url: https://prometheus.demo.prometheus.io/
