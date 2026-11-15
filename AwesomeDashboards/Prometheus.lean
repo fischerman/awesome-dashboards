@@ -464,90 +464,173 @@ inductive TemplateVariableType
 | label_value
   /-- A variable that can be used in a selector representing a list of labels pairs. -/
 | key_value_pairs
-deriving DecidableEq
+deriving Repr, BEq, DecidableEq
 
-def Vars := String → Option TemplateVariableType
+abbrev Vars := List (String × TemplateVariableType)
+
+namespace Vars
+
+  def noVar : Vars := []
+
+  def lookup : Vars → String → Option TemplateVariableType
+    | [], _ => .none
+    | (k, ty) :: xs, name => if k = name then .some ty else lookup xs name
+
+  /--
+    Combines the variable lists `a` and `b`.
+    Variables in `a` have precedence.
+  -/
+  def or (a b : Vars) : Vars := a ++ b
+
+  theorem lookup_or_left {a b : Vars} {name : String} {ty : TemplateVariableType}
+      (h : a.lookup name = .some ty) : (a.or b).lookup name = .some ty := by
+    induction a with
+    | nil => cases h
+    | cons hd tl ih =>
+      cases hd with | mk k val =>
+      dsimp [or, lookup] at h ⊢
+      by_cases hk : k = name
+      · rw [if_pos hk] at h ⊢
+        exact h
+      · rw [if_neg hk] at h ⊢
+        exact ih h
+
+  theorem lookup_or_of_none {a b : Vars} {name : String}
+      (h : a.lookup name = .none) : (a.or b).lookup name = b.lookup name := by
+    induction a with
+    | nil => rfl
+    | cons hd tl ih =>
+      cases hd with | mk k val =>
+      dsimp [or, lookup] at h ⊢
+      by_cases hk : k = name
+      · rw [if_pos hk] at h
+        cases h
+      · rw [if_neg hk] at h ⊢
+        exact ih h
+
+  theorem mem_keys_of_lookup_some {v : Vars} {name : String} {ty : TemplateVariableType}
+      (h : v.lookup name = .some ty) : name ∈ v.map Prod.fst := by
+    induction v with
+    | nil => cases h
+    | cons hd tl ih =>
+      cases hd with | mk k val =>
+      dsimp [lookup] at h
+      by_cases hk : k = name
+      · subst hk
+        exact List.Mem.head _
+      · rw [if_neg hk] at h
+        exact List.Mem.tail _ (ih h)
+
+end Vars
 
 /--
-  Combines the maps a and b.
-  Variables in a have precendence.
+  Two `Vars` lists have no conflict when every variable bound in `b` either maps to the
+  same type in `a` or is not present in `a`.
 -/
-def Vars.or (a b : Vars) : Vars := fun n => match a n with
-  | (.some x) => .some x
-  | .none => b n
+def no_conflict (a b : Vars) : Prop :=
+  ∀ k, k ∈ b.map Prod.fst → a.lookup k = b.lookup k ∨ a.lookup k = .none
 
--- Should this be a bool or a decidable prop?
--- def no_conflict (a b : Vars) : Bool := _
-def no_conflict (a b : Vars) : Prop := ∀x, a x == b x ∨ a x == .none ∨ b x == .none
+def dec_no_conflict_keys (a b : Vars) (keys : List String) :
+    Decidable (∀ k, k ∈ keys → a.lookup k = b.lookup k ∨ a.lookup k = .none) :=
+  match keys with
+  | [] => isTrue (by intro k hk; cases hk)
+  | x :: xs =>
+    if h : a.lookup x = b.lookup x ∨ a.lookup x = .none then
+      match dec_no_conflict_keys a b xs with
+      | isTrue hxs => isTrue (by
+          intro k hk
+          cases hk with
+          | head => exact h
+          | tail _ hmem => exact hxs k hmem)
+      | isFalse hxs => isFalse (by
+          intro hall
+          apply hxs
+          intro k hk
+          exact hall k (List.Mem.tail _ hk))
+    else
+      isFalse (by
+        intro hall
+        exact h (hall x (List.Mem.head _)))
 
-def dec_selector_value_bound (vars : Vars) (x : String × String) : Decidable (vars x.snd = some TemplateVariableType.label_value) :=
-  match vars x.snd with
-  | .none => isFalse (by
-        intro
-        contradiction
-      )
-  | .some .key_value_pairs => isFalse (by
-        intro h
-        cases h
-      )
-  | .some TemplateVariableType.label_value => isTrue rfl
+instance (a b : Vars) : Decidable (no_conflict a b) :=
+  dec_no_conflict_keys a b (b.map Prod.fst)
 
-instance (vars : Vars) (x : String × String) : Decidable (vars x.snd = some TemplateVariableType.label_value) := dec_selector_value_bound vars x
+theorem Vars.lookup_or_right {a b : Vars} {name : String} {ty : TemplateVariableType}
+    (hnc : no_conflict a b) (hb : b.lookup name = .some ty) :
+    (a.or b).lookup name = .some ty := by
+  have hmem : name ∈ b.map Prod.fst := Vars.mem_keys_of_lookup_some hb
+  cases hnc name hmem with
+  | inl heq =>
+    rw [hb] at heq
+    exact Vars.lookup_or_left heq
+  | inr hnone =>
+    rw [Vars.lookup_or_of_none hnone]
+    exact hb
 
 /--
   Each variable used in the selector is present in vars, i.e. bound.
   vars may contain variables not used in the selector.
 -/
-def selector_values_bound (vars : Vars) (selectors : List (String × String)) := ∀ h, h ∈ selectors → vars h.snd = .some .label_value
+def selector_values_bound (vars : Vars) (selectors : List (String × String)) : Prop :=
+  ∀ h, h ∈ selectors → vars.lookup h.snd = .some .label_value
+
+def dec_selector_values_bound (vars : Vars) (selectors : List (String × String)) :
+    Decidable (selector_values_bound vars selectors) :=
+  match selectors with
+  | [] => isTrue (by intro s hs; cases hs)
+  | x :: xs =>
+    if h : vars.lookup x.snd = .some .label_value then
+      match dec_selector_values_bound vars xs with
+      | isTrue z => isTrue (by
+          intro hh hhh
+          cases hhh with
+          | head => exact h
+          | tail _ hmem => exact z hh hmem)
+      | isFalse z => isFalse (by
+          intro hh
+          apply z
+          intro hhh hhhh
+          exact hh hhh (List.Mem.tail _ hhhh))
+    else
+      isFalse (by
+        intro hh
+        exact h (hh x (List.Mem.head _)))
+
+instance (vars : Vars) (selectors : List (String × String)) :
+    Decidable (selector_values_bound vars selectors) :=
+  dec_selector_values_bound vars selectors
 
 /--
-  Whether the selector values are by is decidable.
-
-  TODO: Instead of returning Decidable, we can return a wrapper that contains an error message when Decidable is false.
+  Each key-value variable used in the selector is present in vars with type `.key_value_pairs`.
 -/
-def dec_selector_values_bound (vars : Vars) (selectors : List (String × String)) : Decidable (selector_values_bound vars selectors) :=
-  match selectors with
-  | [] => isTrue (by
-      unfold selector_values_bound
-      intro s hs
-      cases hs
-    )
-  | x :: xs => if h : vars x.snd = .some .label_value then (by
-    -- How do I split Decidable on a list into head and tail
-    match dec_selector_values_bound vars xs with
-    | isTrue z => {
-      apply isTrue
-      unfold selector_values_bound at z
-      intro hh
-      intro hhh
-      cases hhh with
-      | head => {
-        exact h
-      }
-      | tail => {
-        apply z
-        trivial
-      }
-    }
-    | isFalse z => {
-      apply isFalse
-      intro hh
-      apply z
-      unfold selector_values_bound
-      intro hhh
-      intro hhhh
-      apply hh
-      apply List.Mem.tail
-      exact hhhh
-    }
-  ) else isFalse (by
-    unfold selector_values_bound
-    intro hh
-    have hhh := hh x (List.Mem.head _)
-    contradiction
-  )
+def key_value_vars_bound (vars : Vars) (key_value_vars : List String) : Prop :=
+  ∀ x, x ∈ key_value_vars → vars.lookup x = .some .key_value_pairs
 
-instance (vars : Vars) (selectors : List (String × String)) : Decidable (selector_values_bound vars selectors) := dec_selector_values_bound vars selectors
+def dec_key_value_vars_bound (vars : Vars) (key_value_vars : List String) :
+    Decidable (key_value_vars_bound vars key_value_vars) :=
+  match key_value_vars with
+  | [] => isTrue (by intro s hs; cases hs)
+  | x :: xs =>
+    if h : vars.lookup x = .some .key_value_pairs then
+      match dec_key_value_vars_bound vars xs with
+      | isTrue z => isTrue (by
+          intro hh hhh
+          cases hhh with
+          | head => exact h
+          | tail _ hmem => exact z hh hmem)
+      | isFalse z => isFalse (by
+          intro hh
+          apply z
+          intro hhh hhhh
+          exact hh hhh (List.Mem.tail _ hhhh))
+    else
+      isFalse (by
+        intro hh
+        exact h (hh x (List.Mem.head _)))
+
+instance (vars : Vars) (key_value_vars : List String) :
+    Decidable (key_value_vars_bound vars key_value_vars) :=
+  dec_key_value_vars_bound vars key_value_vars
 
 def LabelName := String
 def LabelValue := String
@@ -570,139 +653,189 @@ inductive UnsafeTemplatedInstantVector : InstantVectorType → Type where
 /-- For simplicity, we could have an operator enum instead of having each operator as a constructor. -/
 | add_vector (x y : UnsafeTemplatedInstantVector vector) : UnsafeTemplatedInstantVector vector
 
--- TODO: Should we build up the variables as they are added (and merge if we combine them and proving that they don't collide) or define them upfront?
--- Then we always get the minimal set.
--- How do we build up the type? Is there a better inspiration than vector?
--- What data structure can be used to to build vars, that guarantees that each name is only of at most one type?
---
--- The COQ book has an example on simple lambda with type variables.
 inductive TemplatedInstantVector (vars : Vars) : InstantVectorType → Type where
-/-- key_value_vars may be unsafe. -/
-| selector (selectors: List (String × String)) (h : selector_values_bound vars selectors) (literal_selector: List (String × String)) (key_value_vars: List String) /-(h₂: ∀ x, x ∈ key_value_vars → vars x = .some .key_value_pairs)-/ : TemplatedInstantVector vars vector
+| selector
+    (selectors : List (String × String))
+    (h : selector_values_bound vars selectors)
+    (literal_selector : List (String × String))
+    (key_value_vars : List String)
+    (h₂ : key_value_vars_bound vars key_value_vars) : TemplatedInstantVector vars vector
 | add_vector (x y : TemplatedInstantVector vars vector) : TemplatedInstantVector vars vector
 
+theorem selector_values_bound_or_left {a b : Vars} {selectors : List (String × String)}
+    (h : selector_values_bound a selectors) : selector_values_bound (a.or b) selectors := by
+  intro s hs
+  exact Vars.lookup_or_left (h s hs)
+
+theorem selector_values_bound_or_right {a b : Vars} {selectors : List (String × String)}
+    (hnc : no_conflict a b) (h : selector_values_bound b selectors) :
+    selector_values_bound (a.or b) selectors := by
+  intro s hs
+  exact Vars.lookup_or_right hnc (h s hs)
+
+theorem key_value_vars_bound_or_left {a b : Vars} {kvs : List String}
+    (h : key_value_vars_bound a kvs) : key_value_vars_bound (a.or b) kvs := by
+  intro s hs
+  exact Vars.lookup_or_left (h s hs)
+
+theorem key_value_vars_bound_or_right {a b : Vars} {kvs : List String}
+    (hnc : no_conflict a b) (h : key_value_vars_bound b kvs) :
+    key_value_vars_bound (a.or b) kvs := by
+  intro s hs
+  exact Vars.lookup_or_right hnc (h s hs)
+
 /--
-  If a and b are not conflicting then we can add b to the vars of v.
+  If `a` and `b` are not conflicting then we can add `b` to the vars of `v`.
   Basically, we can add unused variables.
 -/
-def vars_or_left {t : InstantVectorType} {a b : Vars} (v : TemplatedInstantVector a t) (h : no_conflict a b) : TemplatedInstantVector (a.or b) t := sorry
+def vars_or_left {t : InstantVectorType} {a b : Vars} (v : TemplatedInstantVector a t) (_ : no_conflict a b) :
+    TemplatedInstantVector (a.or b) t :=
+  match v with
+  | .selector selectors h lit key_value_vars h₂ =>
+    .selector selectors (selector_values_bound_or_left h) lit key_value_vars (key_value_vars_bound_or_left h₂)
+  | .add_vector x y =>
+    .add_vector (vars_or_left x ‹no_conflict a b›) (vars_or_left y ‹no_conflict a b›)
 
--- If a and b are not conflicting then we can add a to the vars of v.
-def vars_or_right {t : InstantVectorType} {a b : Vars} (v : TemplatedInstantVector b t) (h : no_conflict a b) : TemplatedInstantVector (a.or b) t := sorry
+/--
+  If `a` and `b` are not conflicting then we can add `a` to the vars of `v`.
+-/
+def vars_or_right {t : InstantVectorType} {a b : Vars} (v : TemplatedInstantVector b t) (h : no_conflict a b) :
+    TemplatedInstantVector (a.or b) t :=
+  match v with
+  | .selector selectors hs lit key_value_vars hkv =>
+    .selector selectors (selector_values_bound_or_right h hs) lit key_value_vars (key_value_vars_bound_or_right h hkv)
+  | .add_vector x y =>
+    .add_vector (vars_or_right x h) (vars_or_right y h)
 
 namespace TemplatedInstantVector
   /--
     check returns a type-safe vector if all variables in x are bound by vars.
   -/
-  def check {t : InstantVectorType} (vars : Vars) (x : UnsafeTemplatedInstantVector t) : Option (TemplatedInstantVector vars t) := match x with
-  | .selector selectors lit key_values_vars => match dec_selector_values_bound vars selectors with
-      | isTrue h => .some $ .selector selectors h lit key_values_vars
-      | isFalse _ => .none
+  def check {t : InstantVectorType} (vars : Vars) (x : UnsafeTemplatedInstantVector t) :
+      Option (TemplatedInstantVector vars t) := match x with
+  | .selector selectors lit key_values_vars =>
+      match dec_selector_values_bound vars selectors, dec_key_value_vars_bound vars key_values_vars with
+      | isTrue h, isTrue h₂ => .some $ .selector selectors h lit key_values_vars h₂
+      | _, _ => .none
   | .add_vector x y => match check vars x, check vars y with
-      | .none, _ => .none
-      | _, .none => .none
       | .some a, .some b => .some $ .add_vector a b
+      | _, _ => .none
 
-  def noVar : Vars := (fun _ => .none)
+  def noVar : Vars := Vars.noVar
 
-  theorem x : selector_values_bound noVar [] := by
-    unfold selector_values_bound
-    intro vars h
+  theorem empty_selector_values_bound (vars : Vars) : selector_values_bound vars [] := by
+    intro _ h
     cases h
 
-  -- TODO: Can decidecidable equality of options be derived?
-  def dec_option {α : Type} [DecidableEq α] (a b : Option α) : Decidable (a = b) := match a, b with
-  | .none, .some x => isFalse (by
-      intro h
-      cases h
-    )
-  | .some x, .none => isFalse (by
-      intro h
-      cases h
-    )
-  | .none, .none => .isTrue rfl
-  | .some x, .some y => if h₁ : x = y
-    then .isTrue (by
-      rw [h₁]
-    )
-    else .isFalse (by
-      intro h₂
-      cases h₂
-      apply h₁
-      rfl
-    )
-
-
-  instance {α : Type} [DecidableEq α] (a b : Option α) : Decidable (a = b) := dec_option a b
+  theorem empty_key_value_vars_bound (vars : Vars) : key_value_vars_bound vars [] := by
+    intro _ h
+    cases h
 
   /--
-    From a list of selectors where the values are variable references, this function constructs a map of all used variables and a proof the all variables are bound.
+    From a list of selectors where the values are variable references, this function constructs
+    a list of all used variables and a proof that all variables are bound.
   -/
-  def build_vars_for_selector (selectors : List (String × String)) : Option $ Σ' vars: Vars, selector_values_bound vars selectors := match selectors with
-  | [] => .some ⟨noVar, x⟩
-  | x :: xs => match build_vars_for_selector xs with
-    | .none => .none
-    | .some ⟨vars, h⟩ =>
-      -- hh : vars already contains the variable that is used in X and has the correct type.
-      if hh : vars x.snd = .some .label_value then
-        have : selector_values_bound vars (x :: xs) := by
-          unfold selector_values_bound
-          intro s s_mem
-          cases s_mem with
-          | head => exact hh
-          | tail _ s_mem => apply h s s_mem
-        .some ⟨vars, this⟩
-      else if vars x.snd = .none then (
-      -- hhh : x references a variable that is not yet used in vars, so we need to add it
-        -- with the addition of x all selector are still bound properly
-        have : selector_values_bound (fun z => if x.snd = z then .some .label_value else vars z) (x :: xs) := by
-          unfold selector_values_bound
-          intro y y_in
-          cases y_in with
-          | head => simp
-          | tail _ y_in_xs =>
-            unfold selector_values_bound at h
-            have hhhh := h y y_in_xs
-            rw [←hhhh]
-            simp
-        .some ⟨fun y => if x.snd = y then .some .label_value else vars y, this⟩
-      ) else .none
+  def build_vars_for_selector (selectors : List (String × String)) :
+      Option $ Σ' vars : Vars, selector_values_bound vars selectors :=
+    match selectors with
+    | [] => .some ⟨noVar, empty_selector_values_bound noVar⟩
+    | x :: xs => match build_vars_for_selector xs with
+      | .none => .none
+      | .some ⟨vars, h⟩ =>
+        if hh : vars.lookup x.snd = .some .label_value then
+          have : selector_values_bound vars (x :: xs) := by
+            intro s s_mem
+            cases s_mem with
+            | head => exact hh
+            | tail _ s_mem => exact h s s_mem
+          .some ⟨vars, this⟩
+        else if vars.lookup x.snd = .none then
+          have : selector_values_bound ((x.snd, .label_value) :: vars) (x :: xs) := by
+            intro y y_in
+            dsimp [Vars.lookup]
+            cases y_in with
+            | head => rw [if_pos rfl]
+            | tail _ y_in_xs =>
+              by_cases heq : x.snd = y.snd
+              · rw [if_pos heq]
+              · rw [if_neg heq]
+                exact h y y_in_xs
+          .some ⟨(x.snd, .label_value) :: vars, this⟩
+        else .none
 
-/--
-ofUnsafe goes through x and constructs a map of use variables and the type-safe version of x.
-If variables are colliding then .none is returned.
--/
-  def ofUnsafe (x : UnsafeTemplatedInstantVector t) : Option (Σ vars : Vars, TemplatedInstantVector vars t) := match x with
-  | .selector selectors literal_selectors key_value_vars => match build_vars_for_selector selectors with
-    | .none => .none
-    | .some ⟨vars, bound⟩ => .some ⟨vars, .selector selectors bound literal_selectors key_value_vars⟩
+  /--
+    From a list of key-value variable names, constructs a variable list and a proof that all
+    variables are bound with `.key_value_pairs`.
+  -/
+  def build_vars_for_key_value_vars (kvs : List String) :
+      Option $ Σ' vars : Vars, key_value_vars_bound vars kvs :=
+    match kvs with
+    | [] => .some ⟨noVar, empty_key_value_vars_bound noVar⟩
+    | x :: xs => match build_vars_for_key_value_vars xs with
+      | .none => .none
+      | .some ⟨vars, h⟩ =>
+        if hh : vars.lookup x = .some .key_value_pairs then
+          have : key_value_vars_bound vars (x :: xs) := by
+            intro s s_mem
+            cases s_mem with
+            | head => exact hh
+            | tail _ s_mem => exact h s s_mem
+          .some ⟨vars, this⟩
+        else if vars.lookup x = .none then
+          have : key_value_vars_bound ((x, .key_value_pairs) :: vars) (x :: xs) := by
+            intro y y_in
+            dsimp [Vars.lookup]
+            cases y_in with
+            | head => rw [if_pos rfl]
+            | tail _ y_in_xs =>
+              by_cases heq : x = y
+              · rw [if_pos heq]
+              · rw [if_neg heq]
+                exact h y y_in_xs
+          .some ⟨(x, .key_value_pairs) :: vars, this⟩
+        else .none
+
+  /--
+    ofUnsafe goes through `x` and constructs a map of used variables and the type-safe version of `x`.
+    If variables are colliding then `.none` is returned.
+  -/
+  def ofUnsafe (x : UnsafeTemplatedInstantVector t) :
+      Option (Σ vars : Vars, TemplatedInstantVector vars t) := match x with
+  | .selector selectors literal_selectors key_value_vars =>
+    match build_vars_for_selector selectors, build_vars_for_key_value_vars key_value_vars with
+    | .some ⟨sVars, hs⟩, .some ⟨kvVars, hkv⟩ =>
+      if hnc : no_conflict sVars kvVars then
+        .some ⟨sVars.or kvVars, .selector selectors (selector_values_bound_or_left hs) literal_selectors key_value_vars (key_value_vars_bound_or_right hnc hkv)⟩
+      else
+        .none
+    | _, _ => .none
   | .add_vector a b => match ofUnsafe a, ofUnsafe b with
-    | .none, _ => .none
-    | _, .none => .none
-    -- How do we decide whether aVars and bVars are compatible?
-    -- aVars and bVars are functions, so their domain is infinite and no_conflict is undecidable.
-    -- We probably have to deduce it from the usage in a' and b' or change Vars into a map.
-    | .some ⟨aVars, a'⟩, some ⟨bVars, b'⟩ =>
-        let vars' : Vars := aVars.or bVars
-        .some ⟨vars', .add_vector (vars_or_left a' sorry) (vars_or_right b' sorry)⟩ -- TODO: Use theorems to combine variables. If variables collides returns .none.
-
-  -- TODO: there are no unused variables produced by build_vars_for_selector
-  --theorem build_vars_for_selector_optimal
+    | .some ⟨aVars, a'⟩, .some ⟨bVars, b'⟩ =>
+      if hnc : no_conflict aVars bVars then
+        .some ⟨aVars.or bVars, .add_vector (vars_or_left a' hnc) (vars_or_right b' hnc)⟩
+      else
+        .none
+    | _, _ => .none
 
   -- TODO: syntax for templated promQL
 
-  def toString {vars : String → Option TemplateVariableType} {t: InstantVectorType} (v: TemplatedInstantVector vars t) : String := match v with
-    | .selector sls _ lits _ => let sls' := sls.map (λs => s.fst ++ "=\"$" ++ s.snd ++ "\"")
-        let lits' := lits.map (λl => l.fst ++ "=\"" ++ l.snd ++ "\"")
-        "{" ++ (joinSep (sls' ++ lits') ", ") ++ "}"
+  def toString {vars : Vars} {t : InstantVectorType} (v : TemplatedInstantVector vars t) : String := match v with
+    | .selector sls _ lits kvs _ =>
+        let sls' := sls.map (λ s => s.fst ++ "=\"$" ++ s.snd ++ "\"")
+        let lits' := lits.map (λ l => l.fst ++ "=\"" ++ l.snd ++ "\"")
+        let kvs' := kvs.map (λ kv => "$" ++ kv)
+        "{" ++ (joinSep (sls' ++ lits' ++ kvs') ", ") ++ "}"
     | .add_vector x y => s!"{toString x} + {toString y}"
 
-  instance {vars : String → Option TemplateVariableType} {t: InstantVectorType} : ToString (TemplatedInstantVector vars t) := {
+  instance {vars : Vars} {t : InstantVectorType} : ToString (TemplatedInstantVector vars t) := {
     toString := (fun v => v.toString)
   }
 
-  #eval check (λ x => match x with
-    | "instance" => .some .label_value
-    | _ => .none
-  ) (.add_vector (.selector [⟨"instance", "instance"⟩] [⟨"operation", "get"⟩] []) (.selector [⟨"instance", "instance"⟩] [⟨"operation", "list"⟩] []))
+  #eval check [("instance", .label_value)]
+    (.add_vector (.selector [⟨"instance", "instance"⟩] [⟨"operation", "get"⟩] []) (.selector [⟨"instance", "instance"⟩] [⟨"operation", "list"⟩] []))
+
+  #eval (ofUnsafe (.add_vector
+    (.selector [⟨"instance", "instance"⟩] [⟨"operation", "get"⟩] ["extra_filters"])
+    (.selector [⟨"instance", "instance"⟩] [⟨"operation", "list"⟩] []))).map (fun ⟨vars, v⟩ => (vars, v.toString))
+
 end TemplatedInstantVector
