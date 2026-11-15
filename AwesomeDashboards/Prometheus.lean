@@ -554,7 +554,10 @@ def LabelValue := String
 /-- The name of a variable -/
 def VarRef := String
 
-/-- A version of promql that allows the use of variables. The variables can be of the wrong type or not defined at all, hence unsafe. -/
+/--
+A version of promql that allows the use of variables.
+The variables can be of the wrong type or not defined at all, hence unsafe.
+-/
 inductive UnsafeTemplatedInstantVector : InstantVectorType → Type where
 /--
   value_vars contains eqality selectors where the values are variables.
