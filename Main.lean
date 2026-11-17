@@ -12,7 +12,9 @@ def myPrometheusEnv : Environment := {
   scrapeConfigs := [{ targetLabels := ["env"], exporter := node_exporter }]
 }
 
-def myDashboard : Dashboard myPrometheusEnv := { name := "My Dashboard", panels := [{
+def myVars : Vars := [("instance", .label_value)]
+
+def myDashboard : Dashboard myPrometheusEnv myVars := { name := "My Dashboard", panels := [{
   panels := [
     (.graph { promql := .inl { v := [pql| node_filesystem_avail_bytes{} ]}, legendFormat := "{{device}}"}),
     (.graph { promql := .inl { v := [pql| process_cpu_seconds_total{} ]}}),

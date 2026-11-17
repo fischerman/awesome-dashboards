@@ -5,11 +5,11 @@ set_option linter.unusedVariables false
 
 open InstantVectorType
 
-structure GraphPanel {e : Environment} where
-  promql : TypesafeInstantVector .vector e ⊕ UnsafeTemplatedInstantVector .vector
+structure GraphPanel {e : Environment} {vars : Vars} where
+  promql : TypesafeInstantVector .vector e ⊕ TemplatedInstantVector vars .vector
   legendFormat : Option String := .none
 
-def evalGraph' {e : Environment} (g : @GraphPanel e) (res : Nat) (endd : Nat) (steps : Nat) := ""
+def evalGraph' {e : Environment} {vars : Vars} (g : @GraphPanel e vars) (res : Nat) (endd : Nat) (steps : Nat) := ""
 
 structure Column (e : Environment) where
 name : String
@@ -45,14 +45,14 @@ def prometheusQueryInstant (v : InstantVector vector) : IO (List InstantValue) :
 
 -- def TablePanel.columnsToRows (t : TablePanel) (data : List (List InstantValue)) : List (List InstantValue) := columnsToRows_aux t data Std.mkHashMapImp
 
-inductive Panel {e : Environment}
-| graph (g : @GraphPanel e)
+inductive Panel {e : Environment} {vars : Vars}
+| graph (g : @GraphPanel e vars)
 | table (t : TablePanel e)
 
-structure Row (e : Environment) where
-  panels : List $ @Panel e
+structure Row (e : Environment) (vars : Vars := []) where
+  panels : List $ @Panel e vars
   height := 10
 
-structure Dashboard (e : Environment) where
+structure Dashboard (e : Environment) (vars : Vars := []) where
   name : String
-  panels : List $ Row e
+  panels : List $ Row e vars

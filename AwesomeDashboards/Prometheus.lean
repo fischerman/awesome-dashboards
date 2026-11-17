@@ -656,10 +656,10 @@ inductive UnsafeTemplatedInstantVector : InstantVectorType → Type where
 inductive TemplatedInstantVector (vars : Vars) : InstantVectorType → Type where
 | selector
     (selectors : List (String × String))
-    (h : selector_values_bound vars selectors)
     (literal_selector : List (String × String))
     (key_value_vars : List String)
-    (h₂ : key_value_vars_bound vars key_value_vars) : TemplatedInstantVector vars vector
+    (h : selector_values_bound vars selectors := by decide)
+    (h₂ : key_value_vars_bound vars key_value_vars := by decide) : TemplatedInstantVector vars vector
 | add_vector (x y : TemplatedInstantVector vars vector) : TemplatedInstantVector vars vector
 
 theorem selector_values_bound_or_left {a b : Vars} {selectors : List (String × String)}
@@ -691,8 +691,8 @@ theorem key_value_vars_bound_or_right {a b : Vars} {kvs : List String}
 def vars_or_left {t : InstantVectorType} {a b : Vars} (v : TemplatedInstantVector a t) (_ : no_conflict a b) :
     TemplatedInstantVector (a.or b) t :=
   match v with
-  | .selector selectors h lit key_value_vars h₂ =>
-    .selector selectors (selector_values_bound_or_left h) lit key_value_vars (key_value_vars_bound_or_left h₂)
+  | .selector selectors lit key_value_vars h h₂ =>
+    .selector selectors lit key_value_vars (selector_values_bound_or_left h) (key_value_vars_bound_or_left h₂)
   | .add_vector x y =>
     .add_vector (vars_or_left x ‹no_conflict a b›) (vars_or_left y ‹no_conflict a b›)
 
@@ -702,8 +702,8 @@ def vars_or_left {t : InstantVectorType} {a b : Vars} (v : TemplatedInstantVecto
 def vars_or_right {t : InstantVectorType} {a b : Vars} (v : TemplatedInstantVector b t) (h : no_conflict a b) :
     TemplatedInstantVector (a.or b) t :=
   match v with
-  | .selector selectors hs lit key_value_vars hkv =>
-    .selector selectors (selector_values_bound_or_right h hs) lit key_value_vars (key_value_vars_bound_or_right h hkv)
+  | .selector selectors lit key_value_vars hs hkv =>
+    .selector selectors lit key_value_vars (selector_values_bound_or_right h hs) (key_value_vars_bound_or_right h hkv)
   | .add_vector x y =>
     .add_vector (vars_or_right x h) (vars_or_right y h)
 
@@ -715,7 +715,7 @@ namespace TemplatedInstantVector
       Option (TemplatedInstantVector vars t) := match x with
   | .selector selectors lit key_values_vars =>
       match dec_selector_values_bound vars selectors, dec_key_value_vars_bound vars key_values_vars with
-      | isTrue h, isTrue h₂ => .some $ .selector selectors h lit key_values_vars h₂
+      | isTrue h, isTrue h₂ => .some $ .selector selectors lit key_values_vars h h₂
       | _, _ => .none
   | .add_vector x y => match check vars x, check vars y with
       | .some a, .some b => .some $ .add_vector a b
@@ -805,7 +805,7 @@ namespace TemplatedInstantVector
     match build_vars_for_selector selectors, build_vars_for_key_value_vars key_value_vars with
     | .some ⟨sVars, hs⟩, .some ⟨kvVars, hkv⟩ =>
       if hnc : no_conflict sVars kvVars then
-        .some ⟨sVars.or kvVars, .selector selectors (selector_values_bound_or_left hs) literal_selectors key_value_vars (key_value_vars_bound_or_right hnc hkv)⟩
+        .some ⟨sVars.or kvVars, .selector selectors literal_selectors key_value_vars (selector_values_bound_or_left hs) (key_value_vars_bound_or_right hnc hkv)⟩
       else
         .none
     | _, _ => .none
@@ -820,7 +820,7 @@ namespace TemplatedInstantVector
   -- TODO: syntax for templated promQL
 
   def toString {vars : Vars} {t : InstantVectorType} (v : TemplatedInstantVector vars t) : String := match v with
-    | .selector sls _ lits kvs _ =>
+    | .selector sls lits kvs _ _ =>
         let sls' := sls.map (λ s => s.fst ++ "=\"$" ++ s.snd ++ "\"")
         let lits' := lits.map (λ l => l.fst ++ "=\"" ++ l.snd ++ "\"")
         let kvs' := kvs.map (λ kv => "$" ++ kv)

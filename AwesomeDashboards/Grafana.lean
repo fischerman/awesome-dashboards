@@ -187,7 +187,7 @@ def unsafeTemplatedInstantVectorToGrafanaExpr {t: InstantVectorType} (v: UnsafeT
     "{" ++ (joinSep (sls' ++ lits' ++ key_values_vars') ", ") ++ "}"
 | .add_vector x y => s!"{unsafeTemplatedInstantVectorToGrafanaExpr x} + {unsafeTemplatedInstantVectorToGrafanaExpr y}"
 
-def panelToGrafanaPanel {e : Environment} (p : @Panel e) (pos : GrafanaPanelGridPos) : GrafanaPanel := match p with
+def panelToGrafanaPanel {e : Environment} {vars : Vars} (p : @Panel e vars) (pos : GrafanaPanelGridPos) : GrafanaPanel := match p with
 | Panel.graph g =>  {
   type := "timeseries",
   title := "",
@@ -202,7 +202,7 @@ def panelToGrafanaPanel {e : Environment} (p : @Panel e) (pos : GrafanaPanelGrid
       datasource := myDatasource,
       expr := match g.promql with
         | .inl promql => promql.v.toString
-        | .inr promql => unsafeTemplatedInstantVectorToGrafanaExpr promql
+        | .inr promql => promql.toString
       refId := "A",
       legendFormat := g.legendFormat
     }
@@ -260,21 +260,41 @@ def panelToGrafanaPanel {e : Environment} (p : @Panel e) (pos : GrafanaPanelGrid
       }
     }
 
-def panelsToGrafanaPanels {e : Environment} (ps : List $ @Panel e) (x : Nat) (y : Nat) (w : Nat) (h : Nat) : List GrafanaPanel := match ps with
+def panelsToGrafanaPanels {e : Environment} {vars : Vars} (ps : List $ @Panel e vars) (x : Nat) (y : Nat) (w : Nat) (h : Nat) : List GrafanaPanel := match ps with
 | (p :: ps) => panelToGrafanaPanel p { x := x, y := y, h := h, w := w } :: panelsToGrafanaPanels ps (x+w) y w h
 | [] => []
 
-def rowsToGrafanaPanels {e : Environment} (ps : List $ Row e) (y : Nat) : List GrafanaPanel := match ps with
+def rowsToGrafanaPanels {e : Environment} {vars : Vars} (ps : List $ Row e vars) (y : Nat) : List GrafanaPanel := match ps with
 | (r :: rs) => (rowsToGrafanaPanels rs (y+10)) ++ (panelsToGrafanaPanels r.panels 0 y (24 / r.panels.length) r.height)
 | [] => []
 
-def dashboardToGrafana {e : Environment} (d : @Dashboard e) : GrafanaDashboard := {
+def varToGrafanaTemplatingVariable (name : String) (_ : TemplateVariableType) : GrafanaTemplatingVariable := {
+  datasource := myDatasource,
+  description := "",
+  includeAll := false,
+  multi := false,
+  label := .none,
+  name := name,
+  regex := "",
+  query := { qryType := .query },
+  refresh := .onDashboardLoad
+}
+
+def varsToGrafanaTemplating (vars : Vars) : Option GrafanaTemplating :=
+  match vars with
+  | [] => .none
+  | _ => .some {
+    list := vars.map (fun (name, ty) => varToGrafanaTemplatingVariable name ty)
+  }
+
+def dashboardToGrafana {e : Environment} {vars : Vars} (d : @Dashboard e vars) : GrafanaDashboard := {
   id := none,
   uuid := "lBf76pX7k",
   title := d.name,
   tags := [],
   schemaVersion := 36,
-  panels := rowsToGrafanaPanels d.panels 0
+  panels := rowsToGrafanaPanels d.panels 0,
+  templating := varsToGrafanaTemplating vars
 }
 
 namespace Unpositioned
