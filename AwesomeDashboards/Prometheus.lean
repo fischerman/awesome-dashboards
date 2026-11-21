@@ -83,15 +83,57 @@ structure Environment where
 deriving Lean.FromJson, Lean.ToJson
 
 /--
-VectorMatching defines on which labels vectors are matched.
-
-TODO: Add actual label keys. Currently it only determines whether.
-TODO: A vector matcher is optional. By default all labels must match.
+VectorMatching defines on which labels vectors are matched in binary operations.
+https://prometheus.io/docs/prometheus/latest/querying/operators/#vector-matching
 -/
 inductive VectorMatching
-  | ignoring
-  | on
-  deriving Lean.FromJson, Lean.ToJson
+  | ignoring (labels : List String)
+  | on (labels : List String)
+  deriving Repr, BEq, DecidableEq, Lean.FromJson, Lean.ToJson
+
+namespace VectorMatching
+
+  def toString : VectorMatching → String
+    | .ignoring ls => s!"ignoring({joinSep ls ", "})"
+    | .on ls => s!"on({joinSep ls ", "})"
+
+end VectorMatching
+
+inductive BinOp
+  | add
+  | sub
+  | mul
+  | div
+  deriving Repr, BEq, DecidableEq, Lean.FromJson, Lean.ToJson
+
+namespace BinOp
+
+  def toString : BinOp → String
+    | .add => "+"
+    | .sub => "-"
+    | .mul => "*"
+    | .div => "/"
+
+end BinOp
+
+inductive AggOp
+  | sum
+  | avg
+  | min
+  | max
+  | count
+  deriving Repr, BEq, DecidableEq, Lean.FromJson, Lean.ToJson
+
+namespace AggOp
+
+  def toString : AggOp → String
+    | .sum   => "sum"
+    | .avg   => "avg"
+    | .min   => "min"
+    | .max   => "max"
+    | .count => "count"
+
+end AggOp
 
 /--
 AggregationSelector defines what labels are kept during aggregation.
@@ -413,18 +455,16 @@ open InstantVectorType
   - `InstantVector .pure` (`PureInstantVector`) is pure PromQL with no template variables.
   - `InstantVector .templated` (`TemplatedInstantVector`) permits Grafana template variables
     in label values, range durations, and key-value matchers.
-
-  TODO: Replace specific binary operator constructors with a generic binary operator enum.
 -/
 inductive InstantVector (m : PromQLMode) : InstantVectorType → Type where
   | selector (lms : List (LabelMatcher m)) (offset : Nat) : InstantVector m .vector
   | literal (v : Float) : InstantVector m .scalar
-  | sub_vector (vector_matching : Option VectorMatching) (a b : InstantVector m .vector) : InstantVector m .vector
-  | add_vector (vector_matching : Option VectorMatching) (a b : InstantVector m .vector) : InstantVector m .vector
+  | binOp (op : BinOp) (vector_matching : Option VectorMatching) (a b : InstantVector m .vector) : InstantVector m .vector
   | add_scalar_left (a : InstantVector m .scalar) (b : InstantVector m .vector) : InstantVector m .vector
-  | sum (a : Option AggregationSelector) (v : InstantVector m .vector) : InstantVector m .vector
+  | agg (op : AggOp) (a : Option AggregationSelector) (v : InstantVector m .vector) : InstantVector m .vector
   | topk (a : Option AggregationSelector) (k : Nat) (v : InstantVector m .vector) : InstantVector m .vector
   | rate (r : RangeVector m) : InstantVector m .vector
+  | histogram_quantile (phi : Float) (v : InstantVector m .vector) : InstantVector m .vector
   | label_replace (v : InstantVector m .vector) (dst replacement src regex : String) : InstantVector m .vector
   | time : InstantVector m .scalar
 
@@ -443,13 +483,16 @@ namespace InstantVector
     | .label_replace v dst replace src regex =>
         s!"label_replace({v.toString}, \"{dst}\", \"{replace}\", \"{src}\", \"{regex}\")"
     | .rate r => s!"rate({r.toString})"
-    | .sub_vector _ a b => s!"{a.toString} - {b.toString}"
-    | .add_vector _ a b => s!"{a.toString} + {b.toString}"
+    | .histogram_quantile phi v => s!"histogram_quantile({phi}, {v.toString})"
+    | .binOp op vm a b =>
+        match vm with
+        | .some m' => s!"{a.toString} {op.toString} {m'.toString} {b.toString}"
+        | .none => s!"{a.toString} {op.toString} {b.toString}"
     | .add_scalar_left a b => s!"{a.toString} + {b.toString}"
-    | .sum a v =>
+    | .agg op a v =>
         match a with
-        | .some sel => s!"sum {sel.toString} ({v.toString})"
-        | .none => s!"sum({v.toString})"
+        | .some sel => s!"{op.toString} {sel.toString} ({v.toString})"
+        | .none => s!"{op.toString}({v.toString})"
     | .topk a k v =>
         match a with
         | .some sel => s!"topk {sel.toString} ({k}, {v.toString})"
@@ -459,12 +502,12 @@ namespace InstantVector
   def toTemplated {t : InstantVectorType} : PureInstantVector t → TemplatedInstantVector t
     | .selector lms offset => .selector (lms.map LabelMatcher.toTemplated) offset
     | .literal v => .literal v
-    | .sub_vector vm a b => .sub_vector vm a.toTemplated b.toTemplated
-    | .add_vector vm a b => .add_vector vm a.toTemplated b.toTemplated
+    | .binOp op vm a b => .binOp op vm a.toTemplated b.toTemplated
     | .add_scalar_left a b => .add_scalar_left a.toTemplated b.toTemplated
-    | .sum a v => .sum a v.toTemplated
+    | .agg op a v => .agg op a v.toTemplated
     | .topk a k v => .topk a k v.toTemplated
     | .rate r => .rate r.toTemplated
+    | .histogram_quantile phi v => .histogram_quantile phi v.toTemplated
     | .label_replace v dst repl src reg => .label_replace v.toTemplated dst repl src reg
     | .time => .time
 
@@ -513,27 +556,26 @@ def InstantVector.instantiate (env : VarAssignment) {t : InstantVectorType} :
       let lms' ← instantiateMatchers env lms
       return .selector lms' offset
   | .literal v => .some (.literal v)
-  | .sub_vector vm a b => do
+  | .binOp op vm a b => do
       let a' ← a.instantiate env
       let b' ← b.instantiate env
-      return .sub_vector vm a' b'
-  | .add_vector vm a b => do
-      let a' ← a.instantiate env
-      let b' ← b.instantiate env
-      return .add_vector vm a' b'
+      return .binOp op vm a' b'
   | .add_scalar_left a b => do
       let a' ← a.instantiate env
       let b' ← b.instantiate env
       return .add_scalar_left a' b'
-  | .sum a v => do
+  | .agg op a v => do
       let v' ← v.instantiate env
-      return .sum a v'
+      return .agg op a v'
   | .topk a k v => do
       let v' ← v.instantiate env
       return .topk a k v'
   | .rate r => do
       let r' ← r.instantiate env
       return .rate r'
+  | .histogram_quantile phi v => do
+      let v' ← v.instantiate env
+      return .histogram_quantile phi v'
   | .label_replace v dst repl src reg => do
       let v' ← v.instantiate env
       return .label_replace v' dst repl src reg
@@ -551,16 +593,31 @@ def getMetricDef? (e : Environment) {m : PromQLMode} (lms : List (LabelMatcher m
 def RangeVector.unitOf (e : Environment) {m : PromQLMode} : RangeVector m → Option MetricUnit
   | .selector lms _ => (getMetricDef? e lms).map (·.unit)
 
+def binOpUnit (op : BinOp) (ua ub : Option MetricUnit) : Option MetricUnit :=
+  match op, ua, ub with
+  | .add, a, b | .sub, a, b => if a == b then a else .none
+  | .mul, .some .unitless, b => b
+  | .mul, a, .some .unitless => a
+  | .mul, .some (.div u v), .some w => if v == w then .some u else .none
+  | .mul, .some w, .some (.div u v) => if v == w then .some u else .none
+  | .mul, _, _ => .none
+  | .div, .some u, .some v =>
+      if u == v then .some .unitless
+      else if v == .unitless then .some u
+      else .some (.div u v)
+  | .div, _, _ => .none
+
 def unitOf {m : PromQLMode} {t : InstantVectorType} (e : Environment) : InstantVector m t → Option MetricUnit
   | .time => .some MetricUnit.time
   | .selector lms _ => (getMetricDef? e lms).map (·.unit)
   | .label_replace v _ _ _ _ => unitOf e v
-  | .sub_vector _ a b => if unitOf e a == unitOf e b then unitOf e a else .none
-  | .add_vector _ a b => if unitOf e a == unitOf e b then unitOf e a else .none
+  | .binOp op _ a b => binOpUnit op (unitOf e a) (unitOf e b)
   | .add_scalar_left _ v => unitOf e v
   | .rate r => (r.unitOf e).map (fun x => MetricUnit.div x MetricUnit.seconds)
+  | .histogram_quantile _ v => unitOf e v
   | .literal _ => .some MetricUnit.unitless
-  | .sum _ v => unitOf e v
+  | .agg .count _ _ => .some MetricUnit.unitless
+  | .agg _ _ v => unitOf e v
   | .topk _ _ v => unitOf e v
 
 namespace InstantVector
@@ -571,8 +628,9 @@ namespace InstantVector
   def helpString {m : PromQLMode} {t : InstantVectorType} (e : Environment) : InstantVector m t → String
     | .selector lms _ => Option.getD ((getMetricDef? e lms).map (·.help)) ""
     | .rate (.selector lms _) => Option.getD ((getMetricDef? e lms).map (·.help)) ""
+    | .histogram_quantile _ v => v.helpString e
     | .label_replace v _ _ _ _ => v.helpString e
-    | .sum _ v => v.helpString e
+    | .agg _ _ v => v.helpString e
     | .topk _ _ v => v.helpString e
     | _ => ""
 
@@ -605,12 +663,12 @@ namespace InstantVector
   def usedVars {t : InstantVectorType} : TemplatedInstantVector t → Vars
     | .selector lms _ => matchersUsedVars lms
     | .literal _ | .time => []
-    | .sub_vector _ a b => a.usedVars ++ b.usedVars
-    | .add_vector _ a b => a.usedVars ++ b.usedVars
+    | .binOp _ _ a b => a.usedVars ++ b.usedVars
     | .add_scalar_left a b => a.usedVars ++ b.usedVars
-    | .sum _ v => v.usedVars
+    | .agg _ _ v => v.usedVars
     | .topk _ _ v => v.usedVars
     | .rate r => rangeUsedVars r
+    | .histogram_quantile _ v => v.usedVars
     | .label_replace v _ _ _ _ => v.usedVars
 
 end InstantVector
@@ -674,11 +732,11 @@ def validateEnv (e : Environment) {m : PromQLMode} {t : InstantVectorType} :
     Validator m t
   | .selector lms _ => validateSelectorEnv e lms
   | .rate (.selector lms _) => validateSelectorEnv e lms
-  | .sub_vector _ a b => do validateEnv e a; validateEnv e b
-  | .add_vector _ a b => do validateEnv e a; validateEnv e b
+  | .histogram_quantile _ v => validateEnv e v
+  | .binOp _ _ a b => do validateEnv e a; validateEnv e b
   | .add_scalar_left a b => do validateEnv e a; validateEnv e b
   | .label_replace v _ _ _ _ => validateEnv e v
-  | .sum _ v => validateEnv e v
+  | .agg _ _ v => validateEnv e v
   | .topk _ _ v => validateEnv e v
   | .literal _ | .time => .ok ()
 
@@ -712,11 +770,11 @@ def validateRangeVars (vars : Vars) : RangeVector .templated → Except Validati
 def validateVars (vars : Vars) {t : InstantVectorType} : Validator .templated t
   | .selector lms _ => validateMatchersVars vars lms
   | .rate r => validateRangeVars vars r
-  | .sub_vector _ a b => do validateVars vars a; validateVars vars b
-  | .add_vector _ a b => do validateVars vars a; validateVars vars b
+  | .histogram_quantile _ v => validateVars vars v
+  | .binOp _ _ a b => do validateVars vars a; validateVars vars b
   | .add_scalar_left a b => do validateVars vars a; validateVars vars b
   | .label_replace v _ _ _ _ => validateVars vars v
-  | .sum _ v => validateVars vars v
+  | .agg _ _ v => validateVars vars v
   | .topk _ _ v => validateVars vars v
   | .literal _ | .time => .ok ()
 
@@ -730,32 +788,30 @@ def validateRateOnCounter (e : Environment) {m : PromQLMode} {t : InstantVectorT
           | .counter | .histogram => .ok ()
           | other => .error (.rateOnNonCounter metric.name other)
       | .none => .ok ()
-  | .sub_vector _ a b => do validateRateOnCounter e a; validateRateOnCounter e b
-  | .add_vector _ a b => do validateRateOnCounter e a; validateRateOnCounter e b
+  | .histogram_quantile _ v => validateRateOnCounter e v
+  | .binOp _ _ a b => do validateRateOnCounter e a; validateRateOnCounter e b
   | .add_scalar_left a b => do validateRateOnCounter e a; validateRateOnCounter e b
   | .label_replace v _ _ _ _ => validateRateOnCounter e v
-  | .sum _ v => validateRateOnCounter e v
+  | .agg _ _ v => validateRateOnCounter e v
   | .topk _ _ v => validateRateOnCounter e v
   | .selector _ _ | .literal _ | .time => .ok ()
 
 /-- Validates that binary vector operations combine compatible units. -/
 def validateUnits (e : Environment) {m : PromQLMode} {t : InstantVectorType} :
     Validator m t
-  | .sub_vector _ a b => do
+  | .binOp op _ a b => do
       validateUnits e a
       validateUnits e b
-      let ua := unitOf e a
-      let ub := unitOf e b
-      if ua == ub then .ok () else .error (.incompatibleUnits ua ub)
-  | .add_vector _ a b => do
-      validateUnits e a
-      validateUnits e b
-      let ua := unitOf e a
-      let ub := unitOf e b
-      if ua == ub then .ok () else .error (.incompatibleUnits ua ub)
+      match op with
+      | .add | .sub =>
+        let ua := unitOf e a
+        let ub := unitOf e b
+        if ua == ub then .ok () else .error (.incompatibleUnits ua ub)
+      | .mul | .div => .ok ()
   | .add_scalar_left a b => do validateUnits e a; validateUnits e b
+  | .histogram_quantile _ v => validateUnits e v
   | .label_replace v _ _ _ _ => validateUnits e v
-  | .sum _ v => validateUnits e v
+  | .agg _ _ v => validateUnits e v
   | .topk _ _ v => validateUnits e v
   | .selector _ _ | .rate _ | .literal _ | .time => .ok ()
 
@@ -906,21 +962,50 @@ syntax "**" name : labelref
 macro_rules
 | `(labelref| ** $n) => `(term| $(quote n.raw[0].getAtomVal))
 
+declare_syntax_cat aggop
+syntax "sum"   : aggop
+syntax "avg"   : aggop
+syntax "min"   : aggop
+syntax "max"   : aggop
+syntax "count" : aggop
+
+def expandAggOp : TSyntax `aggop → MacroM (TSyntax `term)
+  | `(aggop| sum)   => `(AggOp.sum)
+  | `(aggop| avg)   => `(AggOp.avg)
+  | `(aggop| min)   => `(AggOp.min)
+  | `(aggop| max)   => `(AggOp.max)
+  | `(aggop| count) => `(AggOp.count)
+  | _               => Macro.throwUnsupported
+
+declare_syntax_cat vecmatching
+syntax "on" "(" labelref,* ")"       : vecmatching
+syntax "ignoring" "(" labelref,* ")" : vecmatching
+
+def expandVecMatching : TSyntax `vecmatching → MacroM (TSyntax `term)
+  | `(vecmatching| on($ls,*))       => `(VectorMatching.on [$ls,*])
+  | `(vecmatching| ignoring($ls,*)) => `(VectorMatching.ignoring [$ls,*])
+  | _                               => Macro.throwUnsupported
+
 declare_syntax_cat instantvector
 syntax name (labelmatchers)? : instantvector
+syntax "(" instantvector ")" : instantvector
 syntax "time()" : instantvector
 syntax "rate(" rangevector ")" : instantvector
+syntax "histogram_quantile(" scientificLit "," instantvector ")" : instantvector
 syntax "label_replace(" instantvector "," strLit "," strLit "," strLit "," strLit ")" : instantvector
-syntax instantvector " - " instantvector : instantvector
-syntax instantvector " + " instantvector : instantvector
-syntax "sum" "(" instantvector ")" : instantvector
-syntax "sum" "by" "(" labelref,* ")" "(" instantvector ")" : instantvector
-syntax "sum" "(" instantvector ")" "by" "(" labelref,* ")" : instantvector
-syntax "sum" "without" "(" labelref,* ")" "(" instantvector ")" : instantvector
-syntax "sum" "(" instantvector ")" "without" "(" labelref,* ")" : instantvector
+syntax:65 instantvector:65 " - " (vecmatching)? instantvector:66 : instantvector
+syntax:65 instantvector:65 " + " (vecmatching)? instantvector:66 : instantvector
+syntax:70 instantvector:70 " * " (vecmatching)? instantvector:71 : instantvector
+syntax:70 instantvector:70 " / " (vecmatching)? instantvector:71 : instantvector
+syntax aggop "(" instantvector ")" : instantvector
+syntax aggop "by" "(" labelref,* ")" "(" instantvector ")" : instantvector
+syntax aggop "(" instantvector ")" "by" "(" labelref,* ")" : instantvector
+syntax aggop "without" "(" labelref,* ")" "(" instantvector ")" : instantvector
+syntax aggop "(" instantvector ")" "without" "(" labelref,* ")" : instantvector
 syntax "topk" "(" numLit "," instantvector ")" : instantvector
 
 macro_rules
+| `(instantvector| ($v)) => `($v)
 | `(instantvector| time()) => `(InstantVector.time (m := PromQLMode.pure))
 | `(instantvector| $name:name) =>
     `(InstantVector.selector (m := PromQLMode.pure)
@@ -928,20 +1013,46 @@ macro_rules
 | `(instantvector| $name:name $xs:labelmatchers) =>
     `(InstantVector.selector (m := PromQLMode.pure)
         ((LabelMatcher.equal (m := PromQLMode.pure) name_label $(quote name.raw[0].getAtomVal)) :: $(xs)) 0)
-| `(instantvector| $a - $b) => `(InstantVector.sub_vector (m := PromQLMode.pure) Option.none $a $b)
-| `(instantvector| $a + $b) => `(InstantVector.add_vector (m := PromQLMode.pure) Option.none $a $b)
+| `(instantvector| $a - $[$vm]? $b) => do
+    let vmTerm ← match vm with
+      | some v => do let t ← expandVecMatching v; `(Option.some $t)
+      | none   => `(Option.none)
+    `(InstantVector.binOp (m := PromQLMode.pure) BinOp.sub $vmTerm $a $b)
+| `(instantvector| $a + $[$vm]? $b) => do
+    let vmTerm ← match vm with
+      | some v => do let t ← expandVecMatching v; `(Option.some $t)
+      | none   => `(Option.none)
+    `(InstantVector.binOp (m := PromQLMode.pure) BinOp.add $vmTerm $a $b)
+| `(instantvector| $a * $[$vm]? $b) => do
+    let vmTerm ← match vm with
+      | some v => do let t ← expandVecMatching v; `(Option.some $t)
+      | none   => `(Option.none)
+    `(InstantVector.binOp (m := PromQLMode.pure) BinOp.mul $vmTerm $a $b)
+| `(instantvector| $a / $[$vm]? $b) => do
+    let vmTerm ← match vm with
+      | some v => do let t ← expandVecMatching v; `(Option.some $t)
+      | none   => `(Option.none)
+    `(InstantVector.binOp (m := PromQLMode.pure) BinOp.div $vmTerm $a $b)
 | `(instantvector| rate($rv)) => `(InstantVector.rate (m := PromQLMode.pure) $rv)
+| `(instantvector| histogram_quantile($phi:scientific, $v)) =>
+    `(InstantVector.histogram_quantile (m := PromQLMode.pure) ($phi : Float) $v)
 | `(instantvector| label_replace($v, $dst, $repl, $src, $reg)) =>
     `(InstantVector.label_replace (m := PromQLMode.pure) $v $dst $repl $src $reg)
-| `(instantvector| sum($v)) => `(InstantVector.sum (m := PromQLMode.pure) .none $v)
-| `(instantvector| sum by($bs,*) ($v)) =>
-    `(InstantVector.sum (m := PromQLMode.pure) (AggregationSelector.by [$bs,*]) ($v))
-| `(instantvector| sum ($v) by($bs,*)) =>
-    `(InstantVector.sum (m := PromQLMode.pure) (AggregationSelector.by [$bs,*]) ($v))
-| `(instantvector| sum without($bs,*) ($v)) =>
-    `(InstantVector.sum (m := PromQLMode.pure) (AggregationSelector.without [$bs,*]) ($v))
-| `(instantvector| sum ($v) without($bs,*)) =>
-    `(InstantVector.sum (m := PromQLMode.pure) (AggregationSelector.without [$bs,*]) ($v))
+| `(instantvector| $op:aggop ($v)) => do
+    let opTerm ← expandAggOp op
+    `(InstantVector.agg (m := PromQLMode.pure) $opTerm .none $v)
+| `(instantvector| $op:aggop by($bs,*) ($v)) => do
+    let opTerm ← expandAggOp op
+    `(InstantVector.agg (m := PromQLMode.pure) $opTerm (AggregationSelector.by [$bs,*]) ($v))
+| `(instantvector| $op:aggop ($v) by($bs,*)) => do
+    let opTerm ← expandAggOp op
+    `(InstantVector.agg (m := PromQLMode.pure) $opTerm (AggregationSelector.by [$bs,*]) ($v))
+| `(instantvector| $op:aggop without($bs,*) ($v)) => do
+    let opTerm ← expandAggOp op
+    `(InstantVector.agg (m := PromQLMode.pure) $opTerm (AggregationSelector.without [$bs,*]) ($v))
+| `(instantvector| $op:aggop ($v) without($bs,*)) => do
+    let opTerm ← expandAggOp op
+    `(InstantVector.agg (m := PromQLMode.pure) $opTerm (AggregationSelector.without [$bs,*]) ($v))
 | `(instantvector| topk($k, $v)) =>
     `(InstantVector.topk (m := PromQLMode.pure) .none $k $v)
 
@@ -1005,19 +1116,24 @@ macro_rules
 
 declare_syntax_cat tinstantvector
 syntax name (tlabelmatchers)? : tinstantvector
+syntax "(" tinstantvector ")" : tinstantvector
 syntax "time()" : tinstantvector
 syntax "rate(" trangevector ")" : tinstantvector
+syntax "histogram_quantile(" scientificLit "," tinstantvector ")" : tinstantvector
 syntax "label_replace(" tinstantvector "," strLit "," strLit "," strLit "," strLit ")" : tinstantvector
-syntax tinstantvector " - " tinstantvector : tinstantvector
-syntax tinstantvector " + " tinstantvector : tinstantvector
-syntax "sum" "(" tinstantvector ")" : tinstantvector
-syntax "sum" "by" "(" labelref,* ")" "(" tinstantvector ")" : tinstantvector
-syntax "sum" "(" tinstantvector ")" "by" "(" labelref,* ")" : tinstantvector
-syntax "sum" "without" "(" labelref,* ")" "(" tinstantvector ")" : tinstantvector
-syntax "sum" "(" tinstantvector ")" "without" "(" labelref,* ")" : tinstantvector
+syntax:65 tinstantvector:65 " - " (vecmatching)? tinstantvector:66 : tinstantvector
+syntax:65 tinstantvector:65 " + " (vecmatching)? tinstantvector:66 : tinstantvector
+syntax:70 tinstantvector:70 " * " (vecmatching)? tinstantvector:71 : tinstantvector
+syntax:70 tinstantvector:70 " / " (vecmatching)? tinstantvector:71 : tinstantvector
+syntax aggop "(" tinstantvector ")" : tinstantvector
+syntax aggop "by" "(" labelref,* ")" "(" tinstantvector ")" : tinstantvector
+syntax aggop "(" tinstantvector ")" "by" "(" labelref,* ")" : tinstantvector
+syntax aggop "without" "(" labelref,* ")" "(" tinstantvector ")" : tinstantvector
+syntax aggop "(" tinstantvector ")" "without" "(" labelref,* ")" : tinstantvector
 syntax "topk" "(" numLit "," tinstantvector ")" : tinstantvector
 
 macro_rules
+| `(tinstantvector| ($v)) => `($v)
 | `(tinstantvector| time()) => `(InstantVector.time (m := PromQLMode.templated))
 | `(tinstantvector| $name:name) =>
     `(InstantVector.selector (m := PromQLMode.templated)
@@ -1025,20 +1141,46 @@ macro_rules
 | `(tinstantvector| $name:name $xs:tlabelmatchers) =>
     `(InstantVector.selector (m := PromQLMode.templated)
         ((LabelMatcher.equal (m := PromQLMode.templated) name_label (TemplatedValue.lit $(quote name.raw[0].getAtomVal))) :: $(xs)) 0)
-| `(tinstantvector| $a - $b) => `(InstantVector.sub_vector (m := PromQLMode.templated) Option.none $a $b)
-| `(tinstantvector| $a + $b) => `(InstantVector.add_vector (m := PromQLMode.templated) Option.none $a $b)
+| `(tinstantvector| $a - $[$vm]? $b) => do
+    let vmTerm ← match vm with
+      | some v => do let t ← expandVecMatching v; `(Option.some $t)
+      | none   => `(Option.none)
+    `(InstantVector.binOp (m := PromQLMode.templated) BinOp.sub $vmTerm $a $b)
+| `(tinstantvector| $a + $[$vm]? $b) => do
+    let vmTerm ← match vm with
+      | some v => do let t ← expandVecMatching v; `(Option.some $t)
+      | none   => `(Option.none)
+    `(InstantVector.binOp (m := PromQLMode.templated) BinOp.add $vmTerm $a $b)
+| `(tinstantvector| $a * $[$vm]? $b) => do
+    let vmTerm ← match vm with
+      | some v => do let t ← expandVecMatching v; `(Option.some $t)
+      | none   => `(Option.none)
+    `(InstantVector.binOp (m := PromQLMode.templated) BinOp.mul $vmTerm $a $b)
+| `(tinstantvector| $a / $[$vm]? $b) => do
+    let vmTerm ← match vm with
+      | some v => do let t ← expandVecMatching v; `(Option.some $t)
+      | none   => `(Option.none)
+    `(InstantVector.binOp (m := PromQLMode.templated) BinOp.div $vmTerm $a $b)
 | `(tinstantvector| rate($rv)) => `(InstantVector.rate (m := PromQLMode.templated) $rv)
+| `(tinstantvector| histogram_quantile($phi:scientific, $v)) =>
+    `(InstantVector.histogram_quantile (m := PromQLMode.templated) ($phi : Float) $v)
 | `(tinstantvector| label_replace($v, $dst, $repl, $src, $reg)) =>
     `(InstantVector.label_replace (m := PromQLMode.templated) $v $dst $repl $src $reg)
-| `(tinstantvector| sum($v)) => `(InstantVector.sum (m := PromQLMode.templated) .none $v)
-| `(tinstantvector| sum by($bs,*) ($v)) =>
-    `(InstantVector.sum (m := PromQLMode.templated) (AggregationSelector.by [$bs,*]) ($v))
-| `(tinstantvector| sum ($v) by($bs,*)) =>
-    `(InstantVector.sum (m := PromQLMode.templated) (AggregationSelector.by [$bs,*]) ($v))
-| `(tinstantvector| sum without($bs,*) ($v)) =>
-    `(InstantVector.sum (m := PromQLMode.templated) (AggregationSelector.without [$bs,*]) ($v))
-| `(tinstantvector| sum ($v) without($bs,*)) =>
-    `(InstantVector.sum (m := PromQLMode.templated) (AggregationSelector.without [$bs,*]) ($v))
+| `(tinstantvector| $op:aggop ($v)) => do
+    let opTerm ← expandAggOp op
+    `(InstantVector.agg (m := PromQLMode.templated) $opTerm .none $v)
+| `(tinstantvector| $op:aggop by($bs,*) ($v)) => do
+    let opTerm ← expandAggOp op
+    `(InstantVector.agg (m := PromQLMode.templated) $opTerm (AggregationSelector.by [$bs,*]) ($v))
+| `(tinstantvector| $op:aggop ($v) by($bs,*)) => do
+    let opTerm ← expandAggOp op
+    `(InstantVector.agg (m := PromQLMode.templated) $opTerm (AggregationSelector.by [$bs,*]) ($v))
+| `(tinstantvector| $op:aggop without($bs,*) ($v)) => do
+    let opTerm ← expandAggOp op
+    `(InstantVector.agg (m := PromQLMode.templated) $opTerm (AggregationSelector.without [$bs,*]) ($v))
+| `(tinstantvector| $op:aggop ($v) without($bs,*)) => do
+    let opTerm ← expandAggOp op
+    `(InstantVector.agg (m := PromQLMode.templated) $opTerm (AggregationSelector.without [$bs,*]) ($v))
 | `(tinstantvector| topk($k, $v)) =>
     `(InstantVector.topk (m := PromQLMode.templated) .none $k $v)
 
