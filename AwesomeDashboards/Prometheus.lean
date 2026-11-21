@@ -271,47 +271,74 @@ def RangeDuration.toString : {m : PromQLMode} → RangeDuration m → String
   | .templated, .seconds d => s!"{d}s"
   | .templated, .var name => "$" ++ name
 
+inductive MatchOp
+  | eq
+  | neq
+  | re
+  | nre
+  deriving Repr, BEq, DecidableEq, Lean.FromJson, Lean.ToJson
+
+namespace MatchOp
+
+  def toString : MatchOp → String
+    | .eq  => "="
+    | .neq => "!="
+    | .re  => "=~"
+    | .nre => "!~"
+
+end MatchOp
+
 /--
-Label matcher is a single matcher on a time series.
+Label matcher is a single matcher on a time series (`=`, `!=`, `=~`, `!~`).
 https://prometheus.io/docs/prometheus/latest/querying/basics/#instant-vector-selectors
 
-In `.pure` mode, only equality matchers on literal strings can be constructed.
+In `.pure` mode, matchers only accept literal string values.
 In `.templated` mode, label values may be `$var` references and `.keyValueVar` matchers are allowed.
-
-TODO: Support inequality and regex matchers (`!=`, `=~`, `!~`).
 -/
 inductive LabelMatcher : PromQLMode → Type where
-  | equal {m : PromQLMode} (key : String) (value : LabelMatcherValue m) : LabelMatcher m
+  | matcher {m : PromQLMode} (op : MatchOp) (key : String) (value : LabelMatcherValue m) : LabelMatcher m
   | keyValueVar (name : String) : LabelMatcher .templated
 
 namespace LabelMatcher
 
+  def equal {m : PromQLMode} (key : String) (value : LabelMatcherValue m) : LabelMatcher m :=
+    .matcher .eq key value
+
+  def notEqual {m : PromQLMode} (key : String) (value : LabelMatcherValue m) : LabelMatcher m :=
+    .matcher .neq key value
+
+  def regex {m : PromQLMode} (key : String) (value : LabelMatcherValue m) : LabelMatcher m :=
+    .matcher .re key value
+
+  def notRegex {m : PromQLMode} (key : String) (value : LabelMatcherValue m) : LabelMatcher m :=
+    .matcher .nre key value
+
   def toString {m : PromQLMode} : LabelMatcher m → String
-    | .equal k v => s!"{k}=\"{LabelMatcherValue.toString v}\""
+    | .matcher op k v => s!"{k}{op.toString}\"{LabelMatcherValue.toString v}\""
     | .keyValueVar name => "$" ++ name
 
   def matchedName? {m : PromQLMode} : LabelMatcher m → Option String
-    | .equal k v => if k == name_label then LabelMatcherValue.asLiteral? v else .none
-    | .keyValueVar _ => .none
+    | .matcher .eq k v => if k == name_label then LabelMatcherValue.asLiteral? v else .none
+    | _ => .none
 
   /-- Returns the literal metric name if matched via `__name__="..."`. -/
   def getMatchedName {m : PromQLMode} (lms : List (LabelMatcher m)) : Option String :=
     lms.findSome? matchedName?
 
   def matches_name {m : PromQLMode} : LabelMatcher m → Bool
-    | .equal k v => k == name_label && (LabelMatcherValue.asLiteral? v).isSome
-    | .keyValueVar _ => false
+    | .matcher .eq k v => k == name_label && (LabelMatcherValue.asLiteral? v).isSome
+    | _ => false
 
   def key? {m : PromQLMode} : LabelMatcher m → Option String
-    | .equal k _ => .some k
+    | .matcher _ k _ => .some k
     | .keyValueVar _ => .none
 
   def metricNamePart {m : PromQLMode} : LabelMatcher m → String
-    | .equal _ v => LabelMatcherValue.toString v
+    | .matcher _ _ v => LabelMatcherValue.toString v
     | .keyValueVar _ => ""
 
   def toTemplated : LabelMatcher .pure → LabelMatcher .templated
-    | .equal k v => .equal k (.lit v)
+    | .matcher op k v => .matcher op k (.lit v)
 
 end LabelMatcher
 
@@ -421,8 +448,8 @@ structure VarAssignment where
   keyValuePairs : String → Option (List (LabelMatcher .pure)) := fun _ => .none
 
 def LabelMatcher.instantiate (env : VarAssignment) : LabelMatcher .templated → Option (List (LabelMatcher .pure))
-  | .equal k (.lit s) => .some [.equal k s]
-  | .equal k (.var name) => (env.labelValues name).map (fun s => [.equal k s])
+  | .matcher op k (.lit s) => .some [.matcher op k s]
+  | .matcher op k (.var name) => (env.labelValues name).map (fun s => [.matcher op k s])
   | .keyValueVar name => env.keyValuePairs name
 
 def instantiateMatchers (env : VarAssignment) (lms : List (LabelMatcher .templated)) :
@@ -525,8 +552,8 @@ namespace InstantVector
     | [] => []
     | lm :: xs =>
         match lm with
-        | .equal _ (.lit _) => matchersUsedVars xs
-        | .equal _ (.var name) => (name, .label_value) :: matchersUsedVars xs
+        | .matcher _ _ (.lit _) => matchersUsedVars xs
+        | .matcher _ _ (.var name) => (name, .label_value) :: matchersUsedVars xs
         | .keyValueVar name => (name, .key_value_pairs) :: matchersUsedVars xs
 
   private def rangeUsedVars : RangeVector .templated → Vars
@@ -626,8 +653,8 @@ def validateMatchersVars (vars : Vars) : List (LabelMatcher .templated) → Exce
   | [] => .ok ()
   | lm :: xs =>
       match lm with
-      | .equal _ (.lit _) => validateMatchersVars vars xs
-      | .equal _ (.var name) => do
+      | .matcher _ _ (.lit _) => validateMatchersVars vars xs
+      | .matcher _ _ (.var name) => do
           validateVarBinding vars name .label_value
           validateMatchersVars vars xs
       | .keyValueVar name => do
@@ -758,11 +785,27 @@ def name : Parser := withAntiquot (mkAntiquot "name" `LX.text) {
 @[combinator_formatter name] def name.formatter : Formatter := pure ()
 @[combinator_parenthesizer name] def name.parenthesizer : Parenthesizer := pure ()
 
+declare_syntax_cat matchop
+syntax "="  : matchop
+syntax "!=" : matchop
+syntax "=~" : matchop
+syntax "!~" : matchop
+
+def expandMatchOp : TSyntax `matchop → MacroM (TSyntax `term)
+  | `(matchop| =)  => `(MatchOp.eq)
+  | `(matchop| !=) => `(MatchOp.neq)
+  | `(matchop| =~) => `(MatchOp.re)
+  | `(matchop| !~) => `(MatchOp.nre)
+  | _              => Macro.throwUnsupported
+
+-- Pure PromQL syntax (`[pql| ... ]`)
+
 declare_syntax_cat labelmatcher
-syntax name "=" strLit : labelmatcher
+syntax name matchop strLit : labelmatcher
 macro_rules
-| `(labelmatcher| $key:name=$value) =>
-    `(LabelMatcher.equal (m := PromQLMode.pure) $(quote key.raw[0].getAtomVal) $value)
+| `(labelmatcher| $key:name $op:matchop $value:str) => do
+    let opTerm ← expandMatchOp op
+    `(LabelMatcher.matcher (m := PromQLMode.pure) $opTerm $(quote key.raw[0].getAtomVal) $value)
 
 declare_syntax_cat labelmatchers
 syntax "{" labelmatcher,* "}" : labelmatchers
@@ -836,19 +879,21 @@ macro_rules
 -- because `$ident` is reserved by Lean 4's macro antiquotation parser.
 
 declare_syntax_cat tlabelmatcher
-syntax name "=" strLit : tlabelmatcher
-syntax name "=" "@" name : tlabelmatcher
+syntax name matchop strLit : tlabelmatcher
+syntax name matchop "@" name : tlabelmatcher
 syntax "@" name : tlabelmatcher
 
 macro_rules
-| `(tlabelmatcher| $key:name=$value:str) =>
+| `(tlabelmatcher| $key:name $op:matchop $value:str) => do
+    let opTerm ← expandMatchOp op
     let s := value.getString
     if s.startsWith "$" then
-      `(LabelMatcher.equal (m := PromQLMode.templated) $(quote key.raw[0].getAtomVal) (TemplatedValue.var $(quote (s.drop 1))))
+      `(LabelMatcher.matcher (m := PromQLMode.templated) $opTerm $(quote key.raw[0].getAtomVal) (TemplatedValue.var $(quote (s.drop 1))))
     else
-      `(LabelMatcher.equal (m := PromQLMode.templated) $(quote key.raw[0].getAtomVal) (TemplatedValue.lit $value))
-| `(tlabelmatcher| $key:name=@$var:name) =>
-    `(LabelMatcher.equal (m := PromQLMode.templated) $(quote key.raw[0].getAtomVal) (TemplatedValue.var $(quote var.raw[0].getAtomVal)))
+      `(LabelMatcher.matcher (m := PromQLMode.templated) $opTerm $(quote key.raw[0].getAtomVal) (TemplatedValue.lit $value))
+| `(tlabelmatcher| $key:name $op:matchop @$var:name) => do
+    let opTerm ← expandMatchOp op
+    `(LabelMatcher.matcher (m := PromQLMode.templated) $opTerm $(quote key.raw[0].getAtomVal) (TemplatedValue.var $(quote var.raw[0].getAtomVal)))
 | `(tlabelmatcher| @$var:name) =>
     `(LabelMatcher.keyValueVar $(quote var.raw[0].getAtomVal))
 
