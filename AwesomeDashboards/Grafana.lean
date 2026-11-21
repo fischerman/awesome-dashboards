@@ -179,41 +179,27 @@ def mapI (f : α → Nat → β) : Nat → List α → List β
   | _, []    => []
   | n, a::as => f a n :: mapI f (n+1) as
 
-def unsafeTemplatedInstantVectorToGrafanaExpr {t: InstantVectorType} (v: UnsafeTemplatedInstantVector t) : String := match v with
-| .selector value_vars literal_equal_selectors key_value_vars =>
-    let sls' := value_vars.map (λs => s.fst ++ "=\"$" ++ s.snd ++ "\"")
-    let lits' := literal_equal_selectors.map (λl => l.fst ++ "=\"" ++ l.snd ++ "\"")
-    let key_values_vars' := key_value_vars.map (λkvs => "$" ++ kvs)
-    "{" ++ (joinSep (sls' ++ lits' ++ key_values_vars') ", ") ++ "}"
-| .add_vector x y => s!"{unsafeTemplatedInstantVectorToGrafanaExpr x} + {unsafeTemplatedInstantVectorToGrafanaExpr y}"
-
 def panelToGrafanaPanel {e : Environment} {vars : Vars} (p : @Panel e vars) (pos : GrafanaPanelGridPos) : GrafanaPanel := match p with
 | Panel.graph g =>  {
   type := "timeseries",
   title := "",
   gridPos := pos,
   context := "Hello world",
-  description := match g.promql with
-    | .inl promql => .some promql.helpString
-    | .inr _ => .none
+  description := .some (g.promql.helpString e),
   datasource := myDatasource,
   targets := some [
     {
       datasource := myDatasource,
-      expr := match g.promql with
-        | .inl promql => promql.v.toString
-        | .inr promql => promql.toString
+      expr := g.promql.query.toString,
       refId := "A",
       legendFormat := g.legendFormat
     }
   ],
   fieldConfig := {
     defaults := {
-      unit := match g.promql with
-        | .inl promql => match unitOf e promql.v with
-          | (some m) => metricUnitToGrafanaUnit m
-          | _ => "none"
-        | .inr _ => "none"
+      unit := match g.promql.unit e with
+        | some m => metricUnitToGrafanaUnit m
+        | none => "none"
     },
     overrides := []
   }
@@ -225,7 +211,7 @@ def panelToGrafanaPanel {e : Environment} {vars : Vars} (p : @Panel e vars) (pos
       title := t.name,
       gridPos := pos,
       targets := some $ mapI (fun c i =>
-        { datasource := myDatasource, expr := c.promql.v.toString, refId := String.mk [Char.ofNat (65+i)], format := "table", instant := true, range := false }
+        { datasource := myDatasource, expr := c.promql.query.toString, refId := String.mk [Char.ofNat (65+i)], format := "table", instant := true, range := false }
       ) 0 t.columns,
       transformations := .some [
         .seriesToColumns { byField := t.joinLabel },
@@ -239,9 +225,9 @@ def panelToGrafanaPanel {e : Environment} {vars : Vars} (p : @Panel e vars) (pos
             if h: t.columns.length = 1 then
               let h' : 0 < List.length t.columns := by simp[h];
               let c := t.columns[0]
-              List.map (⟨·, true⟩) $ c.promql.labels.filter (not ∘ (c.additionalLabels.contains ·))
+              List.map (⟨·, true⟩) $ (c.promql.labels e).filter (not ∘ (c.additionalLabels.contains ·))
             else
-              List.foldl (·++·) [] $ mapI (fun c i => List.map (⟨s!"{·} {i+1}", true⟩) $ c.promql.labels.filter (not ∘ (c.additionalLabels.contains ·))) 0 t.columns
+              List.foldl (·++·) [] $ mapI (fun c i => List.map (⟨s!"{·} {i+1}", true⟩) $ (c.promql.labels e).filter (not ∘ (c.additionalLabels.contains ·))) 0 t.columns
           ),
           renameByName := Std.HashMap.ofList (
             if h: t.columns.length = 1 then
@@ -256,7 +242,7 @@ def panelToGrafanaPanel {e : Environment} {vars : Vars} (p : @Panel e vars) (pos
         defaults := {
           unit := "none"
         },
-        overrides := t.columns.map (fun c => { matcher := (.byName c.name), properties := [.unit $ metricUnitToGrafanaUnit $ Option.getD (unitOf e c.promql.v) .unitless]})
+        overrides := t.columns.map (fun c => { matcher := (.byName c.name), properties := [.unit $ metricUnitToGrafanaUnit $ Option.getD (c.promql.unit e) .unitless]})
       }
     }
 

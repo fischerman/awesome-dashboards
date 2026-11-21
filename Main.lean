@@ -16,22 +16,22 @@ def myVars : Vars := [("instance", .label_value)]
 
 def myDashboard : Dashboard myPrometheusEnv myVars := { name := "My Dashboard", panels := [{
   panels := [
-    (.graph { promql := .inl { v := [pql| node_filesystem_avail_bytes{} ]}, legendFormat := "{{device}}"}),
-    (.graph { promql := .inl { v := [pql| process_cpu_seconds_total{} ]}}),
-    (.graph { promql := .inr (.selector [⟨"instance", "instance"⟩] [⟨"__name__", "node_info"⟩] [])})
+    (.graph { promql := { query := [pql| node_filesystem_avail_bytes{} ] }, legendFormat := "{{device}}"}),
+    (.graph { promql := { query := [pql| process_cpu_seconds_total{} ] }}),
+    (.graph { promql := { query := [tpql| rate(node_network_receive_bytes_total{instance="$instance"}[120]) ] }})
   ]
 } , {
   height := 6,
   panels := [
-    (.graph { promql := .inl { v := [pql| rate(node_network_receive_bytes_total{device="eth0"}[120]) ]}}),
+    (.graph { promql := { query := [pql| rate(node_network_receive_bytes_total{device="eth0"}[120]) ] }}),
     (.table { name := "My table", joinLabel := "device", columns := [
-      { name := "Free bytes", promql := { v := [pql| node_filesystem_avail_bytes{} ]}, additionalLabels := ["fstype"] },
-      { name := "Free files", promql := { v := [pql| node_filesystem_files_free{} ]} }
+      { name := "Free bytes", promql := { query := [pql| node_filesystem_avail_bytes{} ] }, additionalLabels := ["fstype"] },
+      { name := "Free files", promql := { query := [pql| node_filesystem_files_free{} ] } }
     ] })
   ]
 }]}
 
--- #eval (⟨[pql| label_replace(node_filesystem_avail_bytes{}, "new", "$1-xyz", "job", "(.*)") ], by eq_refl⟩ : TypesafeInstantVector .vector myPrometheusEnv).labels
+-- #eval (⟨[pql| label_replace(node_filesystem_avail_bytes{}, "new", "$1-xyz", "job", "(.*)") ], by decide⟩ : CheckedPureQuery myPrometheusEnv .vector).labels myPrometheusEnv
 
 def main : IO Unit := do
   IO.print $ Lean.toJson $ dashboardToGrafana myDashboard

@@ -12,11 +12,11 @@ inductive MetricType
 | gauge
 | histogram
 | untyped
-deriving Lean.FromJson, Lean.ToJson
+deriving Repr, BEq, DecidableEq, Lean.FromJson, Lean.ToJson
 
 /--
 Units for time series.
-The have no formal meaning in promql and must be derived from the system that emits the metric.
+They have no formal meaning in PromQL and must be derived from the system that emits the metric.
 
 https://prometheus.io/docs/practices/naming/#base-units
 -/
@@ -28,18 +28,18 @@ inductive MetricUnit
 | time
 | unitless
 /--
-  div is the result of a devision where dividend and devisor have different units.
-  The result of rate() is a div where the devisor unit is seconds.
+  div is the result of a division where dividend and divisor have different units.
+  The result of rate() is a div where the divisor unit is seconds.
  -/
 | div (dividend devisor : MetricUnit)
 deriving Repr, BEq, DecidableEq, Lean.FromJson, Lean.ToJson
 
 structure Metric where
-name : String
-type : MetricType
-labels : List String  -- TODO: some metrics have dynamic label keys
-unit : MetricUnit
-help : String
+  name : String
+  type : MetricType
+  labels : List String  -- TODO: some metrics have dynamic label keys
+  unit : MetricUnit
+  help : String
 deriving Lean.FromJson, Lean.ToJson
 
 def up : Metric := {
@@ -51,20 +51,20 @@ def up : Metric := {
 }
 
 structure Exporter where
-metrics : List Metric
+  metrics : List Metric
 deriving Lean.FromJson, Lean.ToJson
 
 -- The resulting labels of the scrape is a combination of target labels and metric labels.
 -- Prometheus has a config "honor_labels" which deals with conflict.
--- We do not implement this faithful.
+-- We do not implement this faithfully.
 structure ScrapeConfig where
-targetLabels : List String
-exporter : Exporter
+  targetLabels : List String
+  exporter : Exporter
 deriving Lean.FromJson, Lean.ToJson
 
 /--
 The label key that contains the metric name.
-up{} is equvilant to {\_\_name\_\_="up"}
+up{} is equivalent to {\_\_name\_\_="up"}
 
 https://prometheus.io/docs/prometheus/latest/querying/basics/#instant-vector-selectors
 -/
@@ -72,13 +72,14 @@ def name_label := "__name__"
 
 namespace ScrapeConfig
 
-  def labels (s : ScrapeConfig) (name: String) : Option $ List String :=
-    Option.map (fun v => s.targetLabels ++ v.labels ++ ["job", "instance", name_label]) (s.exporter.metrics.find? (fun m => m.name == name))
+  def labels (s : ScrapeConfig) (name : String) : Option $ List String :=
+    Option.map (fun v => s.targetLabels ++ v.labels ++ ["job", "instance", name_label])
+      (s.exporter.metrics.find? (fun m => m.name == name))
 
 end ScrapeConfig
 
 structure Environment where
-scrapeConfigs: List ScrapeConfig
+  scrapeConfigs : List ScrapeConfig
 deriving Lean.FromJson, Lean.ToJson
 
 /--
@@ -109,362 +110,18 @@ namespace AggregationSelector
 
 end AggregationSelector
 
-/--
-Label matcher is a single matcher on a time series.
-https://prometheus.io/docs/prometheus/latest/querying/basics/#instant-vector-selectors
-
-Currently on equality matchers are supported.
-TODO: Support inequality and regex matchers.
+/-!
+## Template Variables
 -/
-inductive LabelMatcher
-| equal (key : String) (value : String)
-deriving Lean.FromJson, Lean.ToJson
-
-namespace LabelMatcher
-
-  def toString (kvp : LabelMatcher) := match kvp with
-  | (.equal k v) => s!"{k}=\"{v}\""
-
-  /-- Returns the value of the metric name if it exists. Label matchers don't need to select a metric name. -/
-  def getMatchedName (lms : List LabelMatcher) : Option String := match lms with
-  | ⟨k, v⟩ :: xs => if k == name_label then .some v else getMatchedName xs
-  | [] => .none
-
-  def matches_name (lm : LabelMatcher) := match lm with
-  | (.equal k _) => k == name_label
-
-  def key (lm : LabelMatcher) := match lm with
-  | (.equal k _) => k
-
-  def value (lm : LabelMatcher) := match lm with
-  | (.equal _ v) => v
-
-end LabelMatcher
-
-inductive RangeVector
-  | selector (lms : List LabelMatcher) (duration : Nat)
-  deriving Lean.FromJson, Lean.ToJson
-
-def RangeVector.to_string : RangeVector → String
-  | (selector lms d) => s!"{(String.join $ List.map (λ l => l.value) (lms.filter LabelMatcher.matches_name)) ++ "{" ++ joinSep (List.map LabelMatcher.toString (lms.filter $ not ∘ LabelMatcher.matches_name)) ", " ++ "}"}[{d}s]"
-
-inductive InstantVectorType
-  | scalar
-  | vector
-  deriving Lean.FromJson, Lean.ToJson
-
-open InstantVectorType
-
-/--
-  An instant vector is used to query Prometheus at a point in time.
-
-  This has to be an indexed family because "InstantVector scalar" depends on "InstantVecot vector" and vice versa (see scalar()).
-  Moreover both types are valid "entrypoints" for a query.
-
-  TODO: Replace specific binary operator constructor with generic once. In most cases the particular operator doesn't matter and it should make proofs easier.
--/
-inductive InstantVector : InstantVectorType → Type
-  | selector (lms : List LabelMatcher) (offset : Nat) : InstantVector vector -- TODO: regex, negative, and proof for minimal label requirements
-  | literal (v : Float) : InstantVector InstantVectorType.scalar
-  | sub_vector (vector_matching : Option VectorMatching) (a b : InstantVector vector) : InstantVector vector
-  | add_scalar_left (a : InstantVector scalar) (b : InstantVector vector) : InstantVector vector
-  | sum (a : Option AggregationSelector) (v : InstantVector vector) : InstantVector vector
-  | topk (a : Option AggregationSelector) (k : Nat) (v : InstantVector vector) : InstantVector vector
-  | rate (r : RangeVector) : InstantVector vector
-  | label_replace (v : InstantVector vector) (dst replacement src regex : String) : InstantVector vector
-  | time : InstantVector scalar
-  deriving Lean.ToJson
-
-namespace InstantVector
-
-  def toString {t : InstantVectorType} : InstantVector t → String
-    | (selector lms offset) => (String.join $ List.map (λ l => l.value) (lms.filter LabelMatcher.matches_name)) ++ "{" ++ joinSep (List.map LabelMatcher.toString (lms.filter $ not ∘ LabelMatcher.matches_name)) ", " ++ "}"
-    | time => "time()"
-    | (label_replace v dst replace src regex) => s!"label_replace({v.toString}, \"{dst}\", \"{replace}\", \"{src}\", \"{regex}\")"
-    | (rate r) => s!"rate({r.to_string})"
-    | (sub_vector vm a b) => s!"{a.toString} - {b.toString}"
-    | (.sum a v) =>
-        let a' := Option.getD (a.map (·.toString)) ""
-        s!"sum {a'} ({v.toString})"
-    | _ => ""
-
-  /-- Subterms are terms that are contained in a another term. This is currently not exhaustive and does not contain range vectors. -/
-  inductive Subterm : {t t' : InstantVectorType} →  InstantVector t → InstantVector t' → Prop where
-    | refl {t : InstantVectorType} (x : InstantVector t) : Subterm x x
-    | sub_vector_left {t : InstantVectorType} {vm : Option VectorMatching} {a b : InstantVector vector} {x : InstantVector t} : Subterm x a → Subterm x (.sub_vector vm a b)
-    | sub_vector_right {t : InstantVectorType} {vm : Option VectorMatching} {a b : InstantVector vector} {x : InstantVector t} : Subterm x b → Subterm x (.sub_vector vm a b)
-    | add_scalar_left_vector {x : InstantVector vector} {a : InstantVector scalar} : Subterm x (.add_scalar_left a x)
-    | label_replace {dst replacement src regex : String} : Subterm x (.label_replace x dst replacement src regex)
-    | sum {a : Option AggregationSelector} {v : InstantVector vector} : Subterm v (.sum a v)
-    | topk (a : Option AggregationSelector) (k : Nat) (v : InstantVector vector) : Subterm v (.topk a k v)
-
-  example : Subterm (.selector [] 0) (.sub_vector .none (.sub_vector .none (.selector [] 0) (.selector [] 1)) (.selector [] 1)) := by repeat constructor
-end InstantVector
-
-/--
-A label matcher is safe when
-- every label that is used exists in combination with all other labels
-
-- currently requires that there is an equlity matcher on the name
-- matches on any occurence of the metric name in the scrape config. Only one must fit. TODO: Check that all definitions are working.
--/
-def typeSafeSelector (lms : List LabelMatcher) (e : Environment) : Bool := match LabelMatcher.getMatchedName lms with
-| (.some v) => Option.isSome $ e.scrapeConfigs.find? (fun c => Option.isSome $ c.exporter.metrics.find? (λ m =>
-    v == m.name &&
-    (List.all (lms.filter $ not ∘ LabelMatcher.matches_name) (λ l => (m.labels ++ c.targetLabels ++ ["job", "instance"]).contains l.key ))
-  ))
-| .none => false
-
-def RangeVector.typesafe (r : RangeVector) (e : Environment) : Bool := match r with
-  | (.selector lms duration) => typeSafeSelector lms e
-
-def InstantVector.typesafe {t : InstantVectorType} (v : InstantVector t) (e : Environment) : Bool := match v with
-  | (InstantVector.selector lm offset) => typeSafeSelector lm e
-  | (InstantVector.sub_vector _ a b) => typesafe a e && typesafe b e
-  | (InstantVector.add_scalar_left a b) => typesafe b e
-  | (InstantVector.label_replace v dst replacement src regex) => typesafe v e
-  -- Short coming: The labels of sum don't have to exist.
-  -- Instead of using the environment we need an intermediate state to track what labels are selected.
-  | (InstantVector.sum a v) => typesafe v e
-  | (InstantVector.topk a k v) => typesafe v e
-  | (InstantVector.rate r) => RangeVector.typesafe r e
-  | _ => false
-
-/-- Any subterm of an type-safe instant vector is also type-safe with respect to the environment. -/
-theorem subterm_typesafe {e : Environment} {t t' : InstantVectorType} (v : InstantVector t) (v' : InstantVector t') (h : v.Subterm v') (h' : v'.typesafe e) : v.typesafe e := by
-  induction v'
-  case literal =>
-    cases h
-    apply h'
-  case selector lms offset =>
-    cases h
-    rewrite [<-h']
-    eq_refl
-  case sub_vector vm a b a_ih b_ih =>
-    cases h with
-    | sub_vector_left h'' =>
-      apply a_ih
-      apply h''
-      unfold InstantVector.typesafe at h'
-      rewrite [Bool.and_eq_true] at h'
-      cases h'
-      assumption
-    | sub_vector_right h'' =>
-      apply b_ih
-      apply h''
-      unfold InstantVector.typesafe at h'
-      rewrite [Bool.and_eq_true] at h'
-      cases h'
-      assumption
-    | refl =>
-      assumption
-  case time =>
-    cases h
-    assumption
-  case label_replace v dst replacement src regex ih =>
-    cases h
-    case refl =>
-      apply h'
-    case label_replace =>
-      apply h'
-  case add_scalar_left a b iha ihb =>
-    cases h
-    case refl =>
-      apply h'
-    case add_scalar_left_vector =>
-      apply h'
-  case sum sel v' ih =>
-    cases h
-    case refl | sum =>
-      apply h'
-  case topk =>
-    cases h
-    case refl | topk =>
-      apply h'
-  case rate =>
-    cases h
-    case refl =>
-      apply h'
-
-
-structure TypesafeInstantVector (t : InstantVectorType) (e : Environment) where
-  v : InstantVector t
-  h : InstantVector.typesafe v e := by eq_refl
-
-namespace TypesafeInstantVector
-  variable {t : InstantVectorType} {e : Environment}
-
-  /--
-    It isn't really sensible to retrieve a single help string from a query.
-    There could multiple metrics or none at all.
-    This is just for demonstration purposes. A more fruitful approach would be to generate a string from all components of the query.
-  -/
-  def helpString : {t : InstantVectorType} → TypesafeInstantVector t e → String
-    | t, ⟨v, h⟩ => match v with
-      | .selector lms _ => (match LabelMatcher.getMatchedName lms with
-        | .some v => Option.getD (e.scrapeConfigs.findSome? (fun c => c.exporter.metrics.findSome? (fun m => if m.name == v then m.help else .none))) ""
-        | .none => ""
-      )
-      | .label_replace v' dst replacement src regex => helpString ⟨v', subterm_typesafe v' (.label_replace v' dst replacement src regex) InstantVector.Subterm.label_replace h⟩
-      | _ => ""
-
-  /--
-    Returns the keys of the labels of the query.
-  -/
-  def labels : {t : InstantVectorType} → TypesafeInstantVector t e → List String
-  | t, ⟨v, h⟩ => match v with
-    | .selector lms _ => (match LabelMatcher.getMatchedName lms with
-        | .some name => Option.getD (e.scrapeConfigs.findSome? (fun c => c.labels name)) []
-        | .none => []
-      )
-    | .literal v => []
-    -- We want to use h as evidence to retrieve the labels
-    | .add_scalar_left a b => labels ⟨b, subterm_typesafe b (.add_scalar_left a b) (InstantVector.Subterm.add_scalar_left_vector) h⟩
-    /- label_replace might or might not create a new label.
-    The the current implementation we can't know whether the regex will match, so we always add the new label.
-    If the label was already present then it is now present twice...
-    -/
-    | .label_replace v dst repl src reg => dst :: labels ⟨v, subterm_typesafe v (.label_replace v dst repl src reg) (InstantVector.Subterm.label_replace) h⟩
-    /- Any operation on a range vectors will remove the label \_\_name\_\_ -/
-    | _ => []
-
-end TypesafeInstantVector
-
-instance (t : InstantVectorType) (e : Environment) : Lean.ToJson $ TypesafeInstantVector t e where
-  toJson := fun v => Lean.toJson v.v
-
-instance {t : InstantVectorType} : ToString $ InstantVector t where
-  toString := InstantVector.toString
-
-instance {t : InstantVectorType} : Repr $ InstantVector t where
-  reprPrec v _ := InstantVector.toString v
-
-#eval InstantVector.rate (RangeVector.selector [.equal "instance" "test"] 5)
-
-def getMetricDef? (e : Environment) (lms : List LabelMatcher) : Option Metric := match LabelMatcher.getMatchedName lms with
-  | (Option.some name) => (e.scrapeConfigs.findSome? (fun c => c.exporter.metrics.find? (λm => m.name = name)))
-  | (Option.none) => Option.none
-
-def RangeVector.unitOf (e : Environment) : RangeVector → Option MetricUnit
-  | (selector lms d) => match getMetricDef? e lms with
-    | (Option.some metric) => metric.unit
-    | _ => Option.none
-
-def unitOf {t : InstantVectorType} (e : Environment) : InstantVector t → Option MetricUnit
-  | (.time) => MetricUnit.time
-  | (.selector lms offset) => match getMetricDef? e lms with
-    | (Option.some metric) => metric.unit
-    | _ => Option.none
-  | (.label_replace v _ _ _ _) => unitOf e v
-  | (.sub_vector _ a b) => if (unitOf e a) = (unitOf e b) then unitOf e a else Option.none
-  | (.add_scalar_left  s v) => unitOf e v -- adding a scalar doesn't change the unit (however, it might no longer make sense)
-  | (.rate r) => (r.unitOf e).map $ λx => MetricUnit.div x (MetricUnit.seconds)
-  | (.literal f) => MetricUnit.unitless -- alternatively we could implement this function only vectors
-  | (.sum a v) => unitOf e v
-  | (.topk a k v) => unitOf e v
-
-open Lean
-open Lean.Parser
-open Lean.PrettyPrinter
-
-def name : Parser := withAntiquot (mkAntiquot "name" `LX.text) {
-  fn := fun c s =>
-    let startPos := s.pos;
-    let s := takeWhile1Fn (fun c => c.isAlphanum || "_".contains c) "Invalid name" c s;
-    mkNodeToken `LX.text startPos c s
-}
-
-@[combinator_formatter name] def name.formatter : Formatter := pure ()
-@[combinator_parenthesizer name] def name.parenthesizer : Parenthesizer := pure ()
-
-declare_syntax_cat labelmatcher
-syntax name "=" strLit : labelmatcher
-macro_rules
-| `(labelmatcher| $key:name=$value) => `(LabelMatcher.equal $(quote key.raw[0].getAtomVal) $value)
-
---
-declare_syntax_cat labelmatchers
--- The parser
-syntax "{" labelmatcher,* "}" : labelmatchers
--- See https://github.com/leanprover/lean4/pull/1251/commits/9eff6572334a40f671928400614309455c76ef38#diff-52ef0c67eea613acf6c0b6284063fd7112cdd40750de38365c214abaef246db4R1854
--- TODO: Remove this workaround
-open TSyntax.Compat
--- How to translate label matchers into Lean terms
-macro_rules
-| `(labelmatchers| { $xs,* }) => `([$xs,*])
-
-declare_syntax_cat rangevector
-syntax name (labelmatchers) "[" numLit "]" : rangevector
-
-macro_rules
-| `(rangevector| $name:name $xs [ $range ] ) => `(RangeVector.selector ((LabelMatcher.equal name_label $(quote name.raw[0].getAtomVal)) :: $(xs)) $range)
-
--- Used in places where a list of labels is required, e.g. by-clause.
-declare_syntax_cat labelref
--- Without the asterisks we get "invalid syntax node kind 'labelref.pseudo'"
--- TODO: Find a way to convert a list of label names to a list of strings without asterisks.
-syntax "**" name : labelref
-macro_rules
-| `(labelref| ** $n) => `(term| $(quote n.raw[0].getAtomVal))
-
-declare_syntax_cat instantvector
-syntax name (labelmatchers)? : instantvector
-syntax "time()" : instantvector
-syntax "rate(" rangevector ")" : instantvector
-syntax "label_replace(" instantvector "," strLit "," strLit "," strLit "," strLit ")" : instantvector
-syntax instantvector " - " instantvector : instantvector
-syntax "sum" "(" instantvector ")"  : instantvector
-syntax "sum" "by" "(" labelref,* ")" "(" instantvector ")"  : instantvector
-syntax "sum" "(" instantvector ")" "by" "(" labelref,* ")" : instantvector
-syntax "sum" "without" "(" labelref,* ")" "(" instantvector ")" : instantvector
-syntax "sum" "(" instantvector ")" "without" "(" labelref,* ")" : instantvector
-
-macro_rules
-| `(instantvector| time()) => `(InstantVector.time)
-| `(instantvector| $name:name) => `(InstantVector.selector [LabelMatcher.equal name_label $(quote name.raw[0].getAtomVal)] 0)
-| `(instantvector| $name:name $xs:labelmatchers) => `(InstantVector.selector ((LabelMatcher.equal name_label $(quote name.raw[0].getAtomVal)) :: $(xs)) 0)
-| `(instantvector| $a-$b) => `(InstantVector.sub_vector Option.none $a $b)
-| `(instantvector| rate($rv)) => `(InstantVector.rate $rv)
-| `(instantvector| label_replace($v, $dst, $repl, $src, $reg)) => `(InstantVector.label_replace $v $dst $repl $src $reg)
-| `(instantvector| sum($v)) => `(InstantVector.sum .none $v)
-| `(instantvector| sum by($bs,*) ($v)) => `(InstantVector.sum (AggregationSelector.by [$bs,*]) ($v))
-| `(instantvector| sum ($v) by($bs,*)) => `(InstantVector.sum (AggregationSelector.by [$bs,*]) ($v))
-| `(instantvector| sum without($bs,*) ($v)) => `(InstantVector.sum (AggregationSelector.by [$bs,*]) ($v))
-| `(instantvector| sum ($v) without($bs,*)) => `(InstantVector.sum (AggregationSelector.by [$bs,*]) ($v))
-
-syntax "[pql|" instantvector "]" : term
-
-macro_rules
-| `([pql| $v:instantvector]) => `($v)
-
-
-
-set_option pp.rawOnError true
-#eval [pql| up{}]
-#eval [pql| up{instance="localhost"}]
-#eval [pql| up - up]
-#eval [pql| up{test="abc", lan="def"} ]
-#eval [pql| time()]
-#eval [pql| rate(up{}[7])]
-#eval [pql| label_replace(up, "new", "$1-xyz", "job", "(.*)") ]
-#eval [pql| sum (up{})]
-#eval [pql| sum by(**instance) (up)]
-#eval [pql| sum (up) by(**instance)]
-#eval [pql| sum without (**instance) (up)]
-#eval [pql| sum (up) without (**instance)]
-
--- syntax:max can be used to change precendense
-
-def up_templated_with_job (job: String) : InstantVector .vector := InstantVector.selector [.equal name_label job] 0
-
-def bytes_receives_templated_with_rate_window (rate_window : Nat) : InstantVector .vector := InstantVector.rate $ RangeVector.selector [.equal name_label "node_network_receive_bytes_total"] rate_window
 
 inductive TemplateVariableType
-   /-- A variable that can be used for a label value. -/
-| label_value
-  /-- A variable that can be used in a selector representing a list of labels pairs. -/
-| key_value_pairs
-deriving Repr, BEq, DecidableEq
+  /-- A variable that can be used for a label value. -/
+  | label_value
+  /-- A variable that can be used in a selector representing a list of label matchers. -/
+  | key_value_pairs
+  /-- A variable that can be used as a range duration (e.g. `$__rate_interval`). -/
+  | duration
+  deriving Repr, BEq, DecidableEq, Lean.FromJson, Lean.ToJson
 
 abbrev Vars := List (String × TemplateVariableType)
 
@@ -567,275 +224,714 @@ theorem Vars.lookup_or_right {a b : Vars} {name : String} {ty : TemplateVariable
     rw [Vars.lookup_or_of_none hnone]
     exact hb
 
-/--
-  Each variable used in the selector is present in vars, i.e. bound.
-  vars may contain variables not used in the selector.
+/-!
+## Mode-Parameterized PromQL AST (Pure PromQL vs. Grafana-Templated PromQL)
 -/
-def selector_values_bound (vars : Vars) (selectors : List (String × String)) : Prop :=
-  ∀ h, h ∈ selectors → vars.lookup h.snd = .some .label_value
-
-def dec_selector_values_bound (vars : Vars) (selectors : List (String × String)) :
-    Decidable (selector_values_bound vars selectors) :=
-  match selectors with
-  | [] => isTrue (by intro s hs; cases hs)
-  | x :: xs =>
-    if h : vars.lookup x.snd = .some .label_value then
-      match dec_selector_values_bound vars xs with
-      | isTrue z => isTrue (by
-          intro hh hhh
-          cases hhh with
-          | head => exact h
-          | tail _ hmem => exact z hh hmem)
-      | isFalse z => isFalse (by
-          intro hh
-          apply z
-          intro hhh hhhh
-          exact hh hhh (List.Mem.tail _ hhhh))
-    else
-      isFalse (by
-        intro hh
-        exact h (hh x (List.Mem.head _)))
-
-instance (vars : Vars) (selectors : List (String × String)) :
-    Decidable (selector_values_bound vars selectors) :=
-  dec_selector_values_bound vars selectors
 
 /--
-  Each key-value variable used in the selector is present in vars with type `.key_value_pairs`.
+  Distinguishes pure PromQL (no template variables permitted by construction)
+  from Grafana-templated PromQL (variables permitted in label values, durations,
+  and key-value matcher slots).
 -/
-def key_value_vars_bound (vars : Vars) (key_value_vars : List String) : Prop :=
-  ∀ x, x ∈ key_value_vars → vars.lookup x = .some .key_value_pairs
+inductive PromQLMode
+  | pure
+  | templated
+  deriving Repr, BEq, DecidableEq, Lean.FromJson, Lean.ToJson
 
-def dec_key_value_vars_bound (vars : Vars) (key_value_vars : List String) :
-    Decidable (key_value_vars_bound vars key_value_vars) :=
-  match key_value_vars with
-  | [] => isTrue (by intro s hs; cases hs)
-  | x :: xs =>
-    if h : vars.lookup x = .some .key_value_pairs then
-      match dec_key_value_vars_bound vars xs with
-      | isTrue z => isTrue (by
-          intro hh hhh
-          cases hhh with
-          | head => exact h
-          | tail _ hmem => exact z hh hmem)
-      | isFalse z => isFalse (by
-          intro hh
-          apply z
-          intro hhh hhhh
-          exact hh hhh (List.Mem.tail _ hhhh))
-    else
-      isFalse (by
-        intro hh
-        exact h (hh x (List.Mem.head _)))
+inductive TemplatedValue
+  | lit (value : String)
+  | var (name : String)
+  deriving Repr, BEq, DecidableEq, Lean.FromJson, Lean.ToJson
 
-instance (vars : Vars) (key_value_vars : List String) :
-    Decidable (key_value_vars_bound vars key_value_vars) :=
-  dec_key_value_vars_bound vars key_value_vars
+inductive TemplatedDuration
+  | seconds (n : Nat)
+  | var (name : String)
+  deriving Repr, BEq, DecidableEq, Lean.FromJson, Lean.ToJson
 
-def LabelName := String
-def LabelValue := String
-/-- The name of a variable -/
-def VarRef := String
+abbrev LabelMatcherValue : PromQLMode → Type
+  | .pure      => String
+  | .templated => TemplatedValue
+
+abbrev RangeDuration : PromQLMode → Type
+  | .pure      => Nat
+  | .templated => TemplatedDuration
+
+def LabelMatcherValue.toString : {m : PromQLMode} → LabelMatcherValue m → String
+  | .pure, s => s
+  | .templated, .lit s => s
+  | .templated, .var name => "$" ++ name
+
+def LabelMatcherValue.asLiteral? : {m : PromQLMode} → LabelMatcherValue m → Option String
+  | .pure, s => .some s
+  | .templated, .lit s => .some s
+  | .templated, .var _ => .none
+
+def RangeDuration.toString : {m : PromQLMode} → RangeDuration m → String
+  | .pure, d => s!"{d}s"
+  | .templated, .seconds d => s!"{d}s"
+  | .templated, .var name => "$" ++ name
 
 /--
-A version of promql that allows the use of variables.
-The variables can be of the wrong type or not defined at all, hence unsafe.
+Label matcher is a single matcher on a time series.
+https://prometheus.io/docs/prometheus/latest/querying/basics/#instant-vector-selectors
+
+In `.pure` mode, only equality matchers on literal strings can be constructed.
+In `.templated` mode, label values may be `$var` references and `.keyValueVar` matchers are allowed.
+
+TODO: Support inequality and regex matchers (`!=`, `=~`, `!~`).
 -/
-inductive UnsafeTemplatedInstantVector : InstantVectorType → Type where
+inductive LabelMatcher : PromQLMode → Type where
+  | equal {m : PromQLMode} (key : String) (value : LabelMatcherValue m) : LabelMatcher m
+  | keyValueVar (name : String) : LabelMatcher .templated
+
+namespace LabelMatcher
+
+  def toString {m : PromQLMode} : LabelMatcher m → String
+    | .equal k v => s!"{k}=\"{LabelMatcherValue.toString v}\""
+    | .keyValueVar name => "$" ++ name
+
+  def matchedName? {m : PromQLMode} : LabelMatcher m → Option String
+    | .equal k v => if k == name_label then LabelMatcherValue.asLiteral? v else .none
+    | .keyValueVar _ => .none
+
+  /-- Returns the literal metric name if matched via `__name__="..."`. -/
+  def getMatchedName {m : PromQLMode} (lms : List (LabelMatcher m)) : Option String :=
+    lms.findSome? matchedName?
+
+  def matches_name {m : PromQLMode} : LabelMatcher m → Bool
+    | .equal k v => k == name_label && (LabelMatcherValue.asLiteral? v).isSome
+    | .keyValueVar _ => false
+
+  def key? {m : PromQLMode} : LabelMatcher m → Option String
+    | .equal k _ => .some k
+    | .keyValueVar _ => .none
+
+  def metricNamePart {m : PromQLMode} : LabelMatcher m → String
+    | .equal _ v => LabelMatcherValue.toString v
+    | .keyValueVar _ => ""
+
+  def toTemplated : LabelMatcher .pure → LabelMatcher .templated
+    | .equal k v => .equal k (.lit v)
+
+end LabelMatcher
+
+inductive RangeVector (m : PromQLMode) : Type where
+  | selector (lms : List (LabelMatcher m)) (duration : RangeDuration m) : RangeVector m
+
+namespace RangeVector
+
+  def toString {m : PromQLMode} : RangeVector m → String
+    | .selector lms d =>
+        let metricName := String.join (lms.filter LabelMatcher.matches_name |>.map LabelMatcher.metricNamePart)
+        let rest := joinSep (lms.filter (not ∘ LabelMatcher.matches_name) |>.map LabelMatcher.toString) ", "
+        metricName ++ "{" ++ rest ++ "}[" ++ RangeDuration.toString d ++ "]"
+
+  def toTemplated : RangeVector .pure → RangeVector .templated
+    | .selector lms d => .selector (lms.map LabelMatcher.toTemplated) (.seconds d)
+
+end RangeVector
+
+inductive InstantVectorType
+  | scalar
+  | vector
+  deriving Repr, BEq, DecidableEq, Lean.FromJson, Lean.ToJson
+
+open InstantVectorType
+
 /--
-  value_vars contains eqality selectors where the values are variables.
-  literal_equal_selectors contains equality matchers that don't use variables.
-  key_value_vars contains variables whose content can contain any matchers.
+  An instant vector is used to query Prometheus at a point in time.
 
-  TODO: Should we allow selectors of different types in any order by having a top-level list which can contain all the possible selectors types?
+  Parameterized by `PromQLMode`:
+  - `InstantVector .pure` (`PureInstantVector`) is pure PromQL with no template variables.
+  - `InstantVector .templated` (`TemplatedInstantVector`) permits Grafana template variables
+    in label values, range durations, and key-value matchers.
+
+  TODO: Replace specific binary operator constructors with a generic binary operator enum.
 -/
-| selector (value_vars: List (LabelName × VarRef)) (literal_equal_selectors: List (LabelName × LabelValue)) (key_value_vars: List VarRef) : UnsafeTemplatedInstantVector vector
-/-- For simplicity, we could have an operator enum instead of having each operator as a constructor. -/
-| add_vector (x y : UnsafeTemplatedInstantVector vector) : UnsafeTemplatedInstantVector vector
+inductive InstantVector (m : PromQLMode) : InstantVectorType → Type where
+  | selector (lms : List (LabelMatcher m)) (offset : Nat) : InstantVector m .vector
+  | literal (v : Float) : InstantVector m .scalar
+  | sub_vector (vector_matching : Option VectorMatching) (a b : InstantVector m .vector) : InstantVector m .vector
+  | add_vector (vector_matching : Option VectorMatching) (a b : InstantVector m .vector) : InstantVector m .vector
+  | add_scalar_left (a : InstantVector m .scalar) (b : InstantVector m .vector) : InstantVector m .vector
+  | sum (a : Option AggregationSelector) (v : InstantVector m .vector) : InstantVector m .vector
+  | topk (a : Option AggregationSelector) (k : Nat) (v : InstantVector m .vector) : InstantVector m .vector
+  | rate (r : RangeVector m) : InstantVector m .vector
+  | label_replace (v : InstantVector m .vector) (dst replacement src regex : String) : InstantVector m .vector
+  | time : InstantVector m .scalar
 
-inductive TemplatedInstantVector (vars : Vars) : InstantVectorType → Type where
-| selector
-    (selectors : List (String × String))
-    (literal_selector : List (String × String))
-    (key_value_vars : List String)
-    (h : selector_values_bound vars selectors := by decide)
-    (h₂ : key_value_vars_bound vars key_value_vars := by decide) : TemplatedInstantVector vars vector
-| add_vector (x y : TemplatedInstantVector vars vector) : TemplatedInstantVector vars vector
+abbrev PureInstantVector := InstantVector .pure
+abbrev TemplatedInstantVector := InstantVector .templated
 
-theorem selector_values_bound_or_left {a b : Vars} {selectors : List (String × String)}
-    (h : selector_values_bound a selectors) : selector_values_bound (a.or b) selectors := by
-  intro s hs
-  exact Vars.lookup_or_left (h s hs)
+namespace InstantVector
 
-theorem selector_values_bound_or_right {a b : Vars} {selectors : List (String × String)}
-    (hnc : no_conflict a b) (h : selector_values_bound b selectors) :
-    selector_values_bound (a.or b) selectors := by
-  intro s hs
-  exact Vars.lookup_or_right hnc (h s hs)
+  def toString {m : PromQLMode} {t : InstantVectorType} : InstantVector m t → String
+    | .selector lms _ =>
+        let metricName := String.join (lms.filter LabelMatcher.matches_name |>.map LabelMatcher.metricNamePart)
+        let rest := joinSep (lms.filter (not ∘ LabelMatcher.matches_name) |>.map LabelMatcher.toString) ", "
+        metricName ++ "{" ++ rest ++ "}"
+    | .literal v => s!"{v}"
+    | .time => "time()"
+    | .label_replace v dst replace src regex =>
+        s!"label_replace({v.toString}, \"{dst}\", \"{replace}\", \"{src}\", \"{regex}\")"
+    | .rate r => s!"rate({r.toString})"
+    | .sub_vector _ a b => s!"{a.toString} - {b.toString}"
+    | .add_vector _ a b => s!"{a.toString} + {b.toString}"
+    | .add_scalar_left a b => s!"{a.toString} + {b.toString}"
+    | .sum a v =>
+        match a with
+        | .some sel => s!"sum {sel.toString} ({v.toString})"
+        | .none => s!"sum({v.toString})"
+    | .topk a k v =>
+        match a with
+        | .some sel => s!"topk {sel.toString} ({k}, {v.toString})"
+        | .none => s!"topk({k}, {v.toString})"
 
-theorem key_value_vars_bound_or_left {a b : Vars} {kvs : List String}
-    (h : key_value_vars_bound a kvs) : key_value_vars_bound (a.or b) kvs := by
-  intro s hs
-  exact Vars.lookup_or_left (h s hs)
+  /-- Lifts a pure PromQL query into a templated PromQL query. -/
+  def toTemplated {t : InstantVectorType} : PureInstantVector t → TemplatedInstantVector t
+    | .selector lms offset => .selector (lms.map LabelMatcher.toTemplated) offset
+    | .literal v => .literal v
+    | .sub_vector vm a b => .sub_vector vm a.toTemplated b.toTemplated
+    | .add_vector vm a b => .add_vector vm a.toTemplated b.toTemplated
+    | .add_scalar_left a b => .add_scalar_left a.toTemplated b.toTemplated
+    | .sum a v => .sum a v.toTemplated
+    | .topk a k v => .topk a k v.toTemplated
+    | .rate r => .rate r.toTemplated
+    | .label_replace v dst repl src reg => .label_replace v.toTemplated dst repl src reg
+    | .time => .time
 
-theorem key_value_vars_bound_or_right {a b : Vars} {kvs : List String}
-    (hnc : no_conflict a b) (h : key_value_vars_bound b kvs) :
-    key_value_vars_bound (a.or b) kvs := by
-  intro s hs
-  exact Vars.lookup_or_right hnc (h s hs)
+end InstantVector
 
-/--
-  If `a` and `b` are not conflicting then we can add `b` to the vars of `v`.
-  Basically, we can add unused variables.
+instance {t : InstantVectorType} : Coe (PureInstantVector t) (TemplatedInstantVector t) where
+  coe := InstantVector.toTemplated
+
+instance {m : PromQLMode} {t : InstantVectorType} : ToString (InstantVector m t) where
+  toString := InstantVector.toString
+
+instance {m : PromQLMode} {t : InstantVectorType} : Repr (InstantVector m t) where
+  reprPrec v _ := InstantVector.toString v
+
+instance {m : PromQLMode} {t : InstantVectorType} : Lean.ToJson (InstantVector m t) where
+  toJson v := Lean.Json.str v.toString
+
+/-- Concrete runtime values for Grafana template variables. -/
+structure VarAssignment where
+  labelValues   : String → Option String := fun _ => .none
+  durations     : String → Option Nat := fun _ => .none
+  keyValuePairs : String → Option (List (LabelMatcher .pure)) := fun _ => .none
+
+def LabelMatcher.instantiate (env : VarAssignment) : LabelMatcher .templated → Option (List (LabelMatcher .pure))
+  | .equal k (.lit s) => .some [.equal k s]
+  | .equal k (.var name) => (env.labelValues name).map (fun s => [.equal k s])
+  | .keyValueVar name => env.keyValuePairs name
+
+def instantiateMatchers (env : VarAssignment) (lms : List (LabelMatcher .templated)) :
+    Option (List (LabelMatcher .pure)) := do
+  let nested ← lms.mapM (LabelMatcher.instantiate env)
+  return nested.foldl (· ++ ·) []
+
+def RangeVector.instantiate (env : VarAssignment) : RangeVector .templated → Option (RangeVector .pure)
+  | .selector lms d => do
+      let lms' ← instantiateMatchers env lms
+      let d' ← match d with
+        | .seconds n => .some n
+        | .var name => env.durations name
+      return .selector lms' d'
+
+/-- Specializes a Grafana-templated query into a pure PromQL query given variable assignments. -/
+def InstantVector.instantiate (env : VarAssignment) {t : InstantVectorType} :
+    TemplatedInstantVector t → Option (PureInstantVector t)
+  | .selector lms offset => do
+      let lms' ← instantiateMatchers env lms
+      return .selector lms' offset
+  | .literal v => .some (.literal v)
+  | .sub_vector vm a b => do
+      let a' ← a.instantiate env
+      let b' ← b.instantiate env
+      return .sub_vector vm a' b'
+  | .add_vector vm a b => do
+      let a' ← a.instantiate env
+      let b' ← b.instantiate env
+      return .add_vector vm a' b'
+  | .add_scalar_left a b => do
+      let a' ← a.instantiate env
+      let b' ← b.instantiate env
+      return .add_scalar_left a' b'
+  | .sum a v => do
+      let v' ← v.instantiate env
+      return .sum a v'
+  | .topk a k v => do
+      let v' ← v.instantiate env
+      return .topk a k v'
+  | .rate r => do
+      let r' ← r.instantiate env
+      return .rate r'
+  | .label_replace v dst repl src reg => do
+      let v' ← v.instantiate env
+      return .label_replace v' dst repl src reg
+  | .time => .some .time
+
+/-!
+## Query Introspection (Units, Help Strings, Labels, Used Variables)
 -/
-def vars_or_left {t : InstantVectorType} {a b : Vars} (v : TemplatedInstantVector a t) (_ : no_conflict a b) :
-    TemplatedInstantVector (a.or b) t :=
-  match v with
-  | .selector selectors lit key_value_vars h h₂ =>
-    .selector selectors lit key_value_vars (selector_values_bound_or_left h) (key_value_vars_bound_or_left h₂)
-  | .add_vector x y =>
-    .add_vector (vars_or_left x ‹no_conflict a b›) (vars_or_left y ‹no_conflict a b›)
 
-/--
-  If `a` and `b` are not conflicting then we can add `a` to the vars of `v`.
--/
-def vars_or_right {t : InstantVectorType} {a b : Vars} (v : TemplatedInstantVector b t) (h : no_conflict a b) :
-    TemplatedInstantVector (a.or b) t :=
-  match v with
-  | .selector selectors lit key_value_vars hs hkv =>
-    .selector selectors lit key_value_vars (selector_values_bound_or_right h hs) (key_value_vars_bound_or_right h hkv)
-  | .add_vector x y =>
-    .add_vector (vars_or_right x h) (vars_or_right y h)
+def getMetricDef? (e : Environment) {m : PromQLMode} (lms : List (LabelMatcher m)) : Option Metric :=
+  match LabelMatcher.getMatchedName lms with
+  | .some name => e.scrapeConfigs.findSome? (fun c => c.exporter.metrics.find? (fun metric => metric.name == name))
+  | .none => .none
 
-namespace TemplatedInstantVector
+def RangeVector.unitOf (e : Environment) {m : PromQLMode} : RangeVector m → Option MetricUnit
+  | .selector lms _ => (getMetricDef? e lms).map (·.unit)
+
+def unitOf {m : PromQLMode} {t : InstantVectorType} (e : Environment) : InstantVector m t → Option MetricUnit
+  | .time => .some MetricUnit.time
+  | .selector lms _ => (getMetricDef? e lms).map (·.unit)
+  | .label_replace v _ _ _ _ => unitOf e v
+  | .sub_vector _ a b => if unitOf e a == unitOf e b then unitOf e a else .none
+  | .add_vector _ a b => if unitOf e a == unitOf e b then unitOf e a else .none
+  | .add_scalar_left _ v => unitOf e v
+  | .rate r => (r.unitOf e).map (fun x => MetricUnit.div x MetricUnit.seconds)
+  | .literal _ => .some MetricUnit.unitless
+  | .sum _ v => unitOf e v
+  | .topk _ _ v => unitOf e v
+
+namespace InstantVector
+
   /--
-    check returns a type-safe vector if all variables in x are bound by vars.
+    Retrieves a help string from the primary metric referenced by the query, if any.
   -/
-  def check {t : InstantVectorType} (vars : Vars) (x : UnsafeTemplatedInstantVector t) :
-      Option (TemplatedInstantVector vars t) := match x with
-  | .selector selectors lit key_values_vars =>
-      match dec_selector_values_bound vars selectors, dec_key_value_vars_bound vars key_values_vars with
-      | isTrue h, isTrue h₂ => .some $ .selector selectors lit key_values_vars h h₂
-      | _, _ => .none
-  | .add_vector x y => match check vars x, check vars y with
-      | .some a, .some b => .some $ .add_vector a b
-      | _, _ => .none
-
-  def noVar : Vars := Vars.noVar
-
-  theorem empty_selector_values_bound (vars : Vars) : selector_values_bound vars [] := by
-    intro _ h
-    cases h
-
-  theorem empty_key_value_vars_bound (vars : Vars) : key_value_vars_bound vars [] := by
-    intro _ h
-    cases h
+  def helpString {m : PromQLMode} {t : InstantVectorType} (e : Environment) : InstantVector m t → String
+    | .selector lms _ => Option.getD ((getMetricDef? e lms).map (·.help)) ""
+    | .rate (.selector lms _) => Option.getD ((getMetricDef? e lms).map (·.help)) ""
+    | .label_replace v _ _ _ _ => v.helpString e
+    | .sum _ v => v.helpString e
+    | .topk _ _ v => v.helpString e
+    | _ => ""
 
   /--
-    From a list of selectors where the values are variable references, this function constructs
-    a list of all used variables and a proof that all variables are bound.
+    Returns the label keys produced by the query.
   -/
-  def build_vars_for_selector (selectors : List (String × String)) :
-      Option $ Σ' vars : Vars, selector_values_bound vars selectors :=
-    match selectors with
-    | [] => .some ⟨noVar, empty_selector_values_bound noVar⟩
-    | x :: xs => match build_vars_for_selector xs with
-      | .none => .none
-      | .some ⟨vars, h⟩ =>
-        if hh : vars.lookup x.snd = .some .label_value then
-          have : selector_values_bound vars (x :: xs) := by
-            intro s s_mem
-            cases s_mem with
-            | head => exact hh
-            | tail _ s_mem => exact h s s_mem
-          .some ⟨vars, this⟩
-        else if vars.lookup x.snd = .none then
-          have : selector_values_bound ((x.snd, .label_value) :: vars) (x :: xs) := by
-            intro y y_in
-            dsimp [Vars.lookup]
-            cases y_in with
-            | head => rw [if_pos rfl]
-            | tail _ y_in_xs =>
-              by_cases heq : x.snd = y.snd
-              · rw [if_pos heq]
-              · rw [if_neg heq]
-                exact h y y_in_xs
-          .some ⟨(x.snd, .label_value) :: vars, this⟩
-        else .none
+  def labels {m : PromQLMode} {t : InstantVectorType} (e : Environment) : InstantVector m t → List String
+    | .selector lms _ =>
+        match LabelMatcher.getMatchedName lms with
+        | .some name => Option.getD (e.scrapeConfigs.findSome? (fun c => c.labels name)) []
+        | .none => []
+    | .literal _ => []
+    | .add_scalar_left _ b => b.labels e
+    | .label_replace v dst _ _ _ => dst :: v.labels e
+    | _ => []
 
-  /--
-    From a list of key-value variable names, constructs a variable list and a proof that all
-    variables are bound with `.key_value_pairs`.
-  -/
-  def build_vars_for_key_value_vars (kvs : List String) :
-      Option $ Σ' vars : Vars, key_value_vars_bound vars kvs :=
-    match kvs with
-    | [] => .some ⟨noVar, empty_key_value_vars_bound noVar⟩
-    | x :: xs => match build_vars_for_key_value_vars xs with
-      | .none => .none
-      | .some ⟨vars, h⟩ =>
-        if hh : vars.lookup x = .some .key_value_pairs then
-          have : key_value_vars_bound vars (x :: xs) := by
-            intro s s_mem
-            cases s_mem with
-            | head => exact hh
-            | tail _ s_mem => exact h s s_mem
-          .some ⟨vars, this⟩
-        else if vars.lookup x = .none then
-          have : key_value_vars_bound ((x, .key_value_pairs) :: vars) (x :: xs) := by
-            intro y y_in
-            dsimp [Vars.lookup]
-            cases y_in with
-            | head => rw [if_pos rfl]
-            | tail _ y_in_xs =>
-              by_cases heq : x = y
-              · rw [if_pos heq]
-              · rw [if_neg heq]
-                exact h y y_in_xs
-          .some ⟨(x, .key_value_pairs) :: vars, this⟩
-        else .none
+  def matchersUsedVars : List (LabelMatcher .templated) → Vars
+    | [] => []
+    | lm :: xs =>
+        match lm with
+        | .equal _ (.lit _) => matchersUsedVars xs
+        | .equal _ (.var name) => (name, .label_value) :: matchersUsedVars xs
+        | .keyValueVar name => (name, .key_value_pairs) :: matchersUsedVars xs
 
-  /--
-    ofUnsafe goes through `x` and constructs a map of used variables and the type-safe version of `x`.
-    If variables are colliding then `.none` is returned.
-  -/
-  def ofUnsafe (x : UnsafeTemplatedInstantVector t) :
-      Option (Σ vars : Vars, TemplatedInstantVector vars t) := match x with
-  | .selector selectors literal_selectors key_value_vars =>
-    match build_vars_for_selector selectors, build_vars_for_key_value_vars key_value_vars with
-    | .some ⟨sVars, hs⟩, .some ⟨kvVars, hkv⟩ =>
-      if hnc : no_conflict sVars kvVars then
-        .some ⟨sVars.or kvVars, .selector selectors literal_selectors key_value_vars (selector_values_bound_or_left hs) (key_value_vars_bound_or_right hnc hkv)⟩
+  private def rangeUsedVars : RangeVector .templated → Vars
+    | .selector lms (.seconds _) => matchersUsedVars lms
+    | .selector lms (.var name) => matchersUsedVars lms ++ [(name, .duration)]
+
+  /-- Extracts all template variables referenced in a templated query. -/
+  def usedVars {t : InstantVectorType} : TemplatedInstantVector t → Vars
+    | .selector lms _ => matchersUsedVars lms
+    | .literal _ | .time => []
+    | .sub_vector _ a b => a.usedVars ++ b.usedVars
+    | .add_vector _ a b => a.usedVars ++ b.usedVars
+    | .add_scalar_left a b => a.usedVars ++ b.usedVars
+    | .sum _ v => v.usedVars
+    | .topk _ _ v => v.usedVars
+    | .rate r => rangeUsedVars r
+    | .label_replace v _ _ _ _ => v.usedVars
+
+end InstantVector
+
+/-- Structured validation errors (designed for both compile-time checks and IDE diagnostics/suggestions). -/
+inductive ValidationError
+  | missingMetricName
+  | unknownMetric (name : String)
+  | unknownLabel (metric : String) (label : String) (validLabels : List String)
+  | unboundVar (name : String) (expected : TemplateVariableType)
+  | varTypeMismatch (name : String) (expected : TemplateVariableType) (actual : TemplateVariableType)
+  | rateOnNonCounter (metric : String) (actual : MetricType)
+  | incompatibleUnits (left right : Option MetricUnit)
+  deriving Repr, BEq, DecidableEq
+
+abbrev Validator (m : PromQLMode) (t : InstantVectorType) :=
+  InstantVector m t → Except ValidationError Unit
+
+def nonNameKeys {m : PromQLMode} : List (LabelMatcher m) → List String
+  | [] => []
+  | lm :: xs =>
+      if LabelMatcher.matches_name lm then
+        nonNameKeys xs
       else
-        .none
-    | _, _ => .none
-  | .add_vector a b => match ofUnsafe a, ofUnsafe b with
-    | .some ⟨aVars, a'⟩, .some ⟨bVars, b'⟩ =>
-      if hnc : no_conflict aVars bVars then
-        .some ⟨aVars.or bVars, .add_vector (vars_or_left a' hnc) (vars_or_right b' hnc)⟩
+        match LabelMatcher.key? lm with
+        | .some k => k :: nonNameKeys xs
+        | .none => nonNameKeys xs
+
+def findMatchingMetrics (metricName : String) : List ScrapeConfig → List (ScrapeConfig × Metric)
+  | [] => []
+  | c :: cs =>
+      match c.exporter.metrics.find? (fun metric => metric.name == metricName) with
+      | .some metric => (c, metric) :: findMatchingMetrics metricName cs
+      | .none => findMatchingMetrics metricName cs
+
+def validateSelectorEnv (e : Environment) {m : PromQLMode} (lms : List (LabelMatcher m)) :
+    Except ValidationError Unit :=
+  match LabelMatcher.getMatchedName lms with
+  | .none => .error .missingMetricName
+  | .some metricName =>
+    match findMatchingMetrics metricName e.scrapeConfigs with
+    | [] => .error (.unknownMetric metricName)
+    | candidates =>
+      let keys := nonNameKeys lms
+      let ok := candidates.any fun (c, metric) =>
+        let validLabels := metric.labels ++ c.targetLabels ++ ["job", "instance"]
+        keys.all validLabels.contains
+      if ok then
+        .ok ()
       else
-        .none
-    | _, _ => .none
+        match candidates with
+        | (c, metric) :: _ =>
+          let validLabels := metric.labels ++ c.targetLabels ++ ["job", "instance"]
+          match keys.find? (fun k => !validLabels.contains k) with
+          | .some badLabel => .error (.unknownLabel metricName badLabel validLabels)
+          | .none => .error (.unknownMetric metricName)
+        | [] => .error (.unknownMetric metricName)
 
-  -- TODO: syntax for templated promQL
+/-- Validates that every metric name and explicit label key exists in `e : Environment`. -/
+def validateEnv (e : Environment) {m : PromQLMode} {t : InstantVectorType} :
+    Validator m t
+  | .selector lms _ => validateSelectorEnv e lms
+  | .rate (.selector lms _) => validateSelectorEnv e lms
+  | .sub_vector _ a b => do validateEnv e a; validateEnv e b
+  | .add_vector _ a b => do validateEnv e a; validateEnv e b
+  | .add_scalar_left a b => do validateEnv e a; validateEnv e b
+  | .label_replace v _ _ _ _ => validateEnv e v
+  | .sum _ v => validateEnv e v
+  | .topk _ _ v => validateEnv e v
+  | .literal _ | .time => .ok ()
 
-  def toString {vars : Vars} {t : InstantVectorType} (v : TemplatedInstantVector vars t) : String := match v with
-    | .selector sls lits kvs _ _ =>
-        let sls' := sls.map (λ s => s.fst ++ "=\"$" ++ s.snd ++ "\"")
-        let lits' := lits.map (λ l => l.fst ++ "=\"" ++ l.snd ++ "\"")
-        let kvs' := kvs.map (λ kv => "$" ++ kv)
-        "{" ++ (joinSep (sls' ++ lits' ++ kvs') ", ") ++ "}"
-    | .add_vector x y => s!"{toString x} + {toString y}"
+def validateVarBinding (vars : Vars) (name : String) (expected : TemplateVariableType) :
+    Except ValidationError Unit :=
+  match vars.lookup name with
+  | .none => .error (.unboundVar name expected)
+  | .some actual =>
+    if actual == expected then .ok ()
+    else .error (.varTypeMismatch name expected actual)
 
-  instance {vars : Vars} {t : InstantVectorType} : ToString (TemplatedInstantVector vars t) := {
-    toString := (fun v => v.toString)
-  }
+def validateMatchersVars (vars : Vars) : List (LabelMatcher .templated) → Except ValidationError Unit
+  | [] => .ok ()
+  | lm :: xs =>
+      match lm with
+      | .equal _ (.lit _) => validateMatchersVars vars xs
+      | .equal _ (.var name) => do
+          validateVarBinding vars name .label_value
+          validateMatchersVars vars xs
+      | .keyValueVar name => do
+          validateVarBinding vars name .key_value_pairs
+          validateMatchersVars vars xs
 
-  #eval check [("instance", .label_value)]
-    (.add_vector (.selector [⟨"instance", "instance"⟩] [⟨"operation", "get"⟩] []) (.selector [⟨"instance", "instance"⟩] [⟨"operation", "list"⟩] []))
+def validateRangeVars (vars : Vars) : RangeVector .templated → Except ValidationError Unit
+  | .selector lms (.seconds _) => validateMatchersVars vars lms
+  | .selector lms (.var name) => do
+      validateMatchersVars vars lms
+      validateVarBinding vars name .duration
 
-  #eval (ofUnsafe (.add_vector
-    (.selector [⟨"instance", "instance"⟩] [⟨"operation", "get"⟩] ["extra_filters"])
-    (.selector [⟨"instance", "instance"⟩] [⟨"operation", "list"⟩] []))).map (fun ⟨vars, v⟩ => (vars, v.toString))
+/-- Validates that every `$var` reference in a templated query is bound in `vars` with the right type. -/
+def validateVars (vars : Vars) {t : InstantVectorType} : Validator .templated t
+  | .selector lms _ => validateMatchersVars vars lms
+  | .rate r => validateRangeVars vars r
+  | .sub_vector _ a b => do validateVars vars a; validateVars vars b
+  | .add_vector _ a b => do validateVars vars a; validateVars vars b
+  | .add_scalar_left a b => do validateVars vars a; validateVars vars b
+  | .label_replace v _ _ _ _ => validateVars vars v
+  | .sum _ v => validateVars vars v
+  | .topk _ _ v => validateVars vars v
+  | .literal _ | .time => .ok ()
 
-end TemplatedInstantVector
+/-- Validates that `rate()` is only applied to counters or histograms. -/
+def validateRateOnCounter (e : Environment) {m : PromQLMode} {t : InstantVectorType} :
+    Validator m t
+  | .rate (.selector lms _) =>
+      match getMetricDef? e lms with
+      | .some metric =>
+          match metric.type with
+          | .counter | .histogram => .ok ()
+          | other => .error (.rateOnNonCounter metric.name other)
+      | .none => .ok ()
+  | .sub_vector _ a b => do validateRateOnCounter e a; validateRateOnCounter e b
+  | .add_vector _ a b => do validateRateOnCounter e a; validateRateOnCounter e b
+  | .add_scalar_left a b => do validateRateOnCounter e a; validateRateOnCounter e b
+  | .label_replace v _ _ _ _ => validateRateOnCounter e v
+  | .sum _ v => validateRateOnCounter e v
+  | .topk _ _ v => validateRateOnCounter e v
+  | .selector _ _ | .literal _ | .time => .ok ()
+
+/-- Validates that binary vector operations combine compatible units. -/
+def validateUnits (e : Environment) {m : PromQLMode} {t : InstantVectorType} :
+    Validator m t
+  | .sub_vector _ a b => do
+      validateUnits e a
+      validateUnits e b
+      let ua := unitOf e a
+      let ub := unitOf e b
+      if ua == ub then .ok () else .error (.incompatibleUnits ua ub)
+  | .add_vector _ a b => do
+      validateUnits e a
+      validateUnits e b
+      let ua := unitOf e a
+      let ub := unitOf e b
+      if ua == ub then .ok () else .error (.incompatibleUnits ua ub)
+  | .add_scalar_left a b => do validateUnits e a; validateUnits e b
+  | .label_replace v _ _ _ _ => validateUnits e v
+  | .sum _ v => validateUnits e v
+  | .topk _ _ v => validateUnits e v
+  | .selector _ _ | .rate _ | .literal _ | .time => .ok ()
+
+def runValidators {m : PromQLMode} {t : InstantVectorType} :
+    List (Validator m t) → InstantVector m t → Except ValidationError Unit
+  | [], _ => .ok ()
+  | check :: rest, q =>
+      match check q with
+      | .ok () => runValidators rest q
+      | .error err => .error err
+
+def decExceptOk {ε : Type} (x : Except ε Unit) : Decidable (x = .ok ()) :=
+  match x with
+  | .ok () => isTrue rfl
+  | .error _ => isFalse (by intro h; cases h)
+
+instance {ε : Type} (x : Except ε Unit) : Decidable (x = .ok ()) := decExceptOk x
+
+/-- A PromQL query verified at compile time against a composable list of validators. -/
+structure ValidatedQuery (m : PromQLMode) (t : InstantVectorType) (validators : List (Validator m t)) where
+  query : InstantVector m t
+  valid : runValidators validators query = .ok () := by decide
+
+def defaultPureValidators (e : Environment) {t : InstantVectorType} : List (Validator .pure t) :=
+  [validateEnv e, validateRateOnCounter e, validateUnits e]
+
+def defaultTemplatedValidators (e : Environment) (vars : Vars) {t : InstantVectorType} :
+    List (Validator .templated t) :=
+  [validateEnv e, validateVars vars, validateRateOnCounter e, validateUnits e]
+
+abbrev CheckedPureQuery (e : Environment) (t : InstantVectorType) :=
+  ValidatedQuery .pure t (defaultPureValidators e)
+
+abbrev CheckedQuery (e : Environment) (vars : Vars) (t : InstantVectorType) :=
+  ValidatedQuery .templated t (defaultTemplatedValidators e vars)
+
+instance {m : PromQLMode} {t : InstantVectorType} {vs : List (Validator m t)} :
+    Lean.ToJson (ValidatedQuery m t vs) where
+  toJson q := Lean.toJson q.query
+
+namespace ValidatedQuery
+
+  def helpString {m : PromQLMode} {t : InstantVectorType} {vs : List (Validator m t)}
+      (e : Environment) (q : ValidatedQuery m t vs) : String :=
+    q.query.helpString e
+
+  def labels {m : PromQLMode} {t : InstantVectorType} {vs : List (Validator m t)}
+      (e : Environment) (q : ValidatedQuery m t vs) : List String :=
+    q.query.labels e
+
+  def unit {m : PromQLMode} {t : InstantVectorType} {vs : List (Validator m t)}
+      (e : Environment) (q : ValidatedQuery m t vs) : Option MetricUnit :=
+    unitOf e q.query
+
+end ValidatedQuery
+
+open Lean
+open Lean.Parser
+open Lean.PrettyPrinter
+
+def name : Parser := withAntiquot (mkAntiquot "name" `LX.text) {
+  fn := fun c s =>
+    let startPos := s.pos;
+    let s := takeWhile1Fn (fun c => c.isAlphanum || "_".contains c) "Invalid name" c s;
+    mkNodeToken `LX.text startPos c s
+}
+
+@[combinator_formatter name] def name.formatter : Formatter := pure ()
+@[combinator_parenthesizer name] def name.parenthesizer : Parenthesizer := pure ()
+
+declare_syntax_cat labelmatcher
+syntax name "=" strLit : labelmatcher
+macro_rules
+| `(labelmatcher| $key:name=$value) =>
+    `(LabelMatcher.equal (m := PromQLMode.pure) $(quote key.raw[0].getAtomVal) $value)
+
+declare_syntax_cat labelmatchers
+syntax "{" labelmatcher,* "}" : labelmatchers
+open TSyntax.Compat
+macro_rules
+| `(labelmatchers| { $xs,* }) => `([$xs,*])
+
+declare_syntax_cat rangevector
+syntax name (labelmatchers) "[" numLit "]" : rangevector
+macro_rules
+| `(rangevector| $name:name $xs [ $range ]) =>
+    `(RangeVector.selector (m := PromQLMode.pure)
+        ((LabelMatcher.equal (m := PromQLMode.pure) name_label $(quote name.raw[0].getAtomVal)) :: $(xs))
+        $range)
+
+-- Used in places where a list of labels is required, e.g. by-clause.
+declare_syntax_cat labelref
+-- Without the asterisks we get "invalid syntax node kind 'labelref.pseudo'"
+-- TODO: Find a way to convert a list of label names to a list of strings without asterisks.
+syntax "**" name : labelref
+macro_rules
+| `(labelref| ** $n) => `(term| $(quote n.raw[0].getAtomVal))
+
+declare_syntax_cat instantvector
+syntax name (labelmatchers)? : instantvector
+syntax "time()" : instantvector
+syntax "rate(" rangevector ")" : instantvector
+syntax "label_replace(" instantvector "," strLit "," strLit "," strLit "," strLit ")" : instantvector
+syntax instantvector " - " instantvector : instantvector
+syntax instantvector " + " instantvector : instantvector
+syntax "sum" "(" instantvector ")" : instantvector
+syntax "sum" "by" "(" labelref,* ")" "(" instantvector ")" : instantvector
+syntax "sum" "(" instantvector ")" "by" "(" labelref,* ")" : instantvector
+syntax "sum" "without" "(" labelref,* ")" "(" instantvector ")" : instantvector
+syntax "sum" "(" instantvector ")" "without" "(" labelref,* ")" : instantvector
+syntax "topk" "(" numLit "," instantvector ")" : instantvector
+
+macro_rules
+| `(instantvector| time()) => `(InstantVector.time (m := PromQLMode.pure))
+| `(instantvector| $name:name) =>
+    `(InstantVector.selector (m := PromQLMode.pure)
+        [LabelMatcher.equal (m := PromQLMode.pure) name_label $(quote name.raw[0].getAtomVal)] 0)
+| `(instantvector| $name:name $xs:labelmatchers) =>
+    `(InstantVector.selector (m := PromQLMode.pure)
+        ((LabelMatcher.equal (m := PromQLMode.pure) name_label $(quote name.raw[0].getAtomVal)) :: $(xs)) 0)
+| `(instantvector| $a - $b) => `(InstantVector.sub_vector (m := PromQLMode.pure) Option.none $a $b)
+| `(instantvector| $a + $b) => `(InstantVector.add_vector (m := PromQLMode.pure) Option.none $a $b)
+| `(instantvector| rate($rv)) => `(InstantVector.rate (m := PromQLMode.pure) $rv)
+| `(instantvector| label_replace($v, $dst, $repl, $src, $reg)) =>
+    `(InstantVector.label_replace (m := PromQLMode.pure) $v $dst $repl $src $reg)
+| `(instantvector| sum($v)) => `(InstantVector.sum (m := PromQLMode.pure) .none $v)
+| `(instantvector| sum by($bs,*) ($v)) =>
+    `(InstantVector.sum (m := PromQLMode.pure) (AggregationSelector.by [$bs,*]) ($v))
+| `(instantvector| sum ($v) by($bs,*)) =>
+    `(InstantVector.sum (m := PromQLMode.pure) (AggregationSelector.by [$bs,*]) ($v))
+| `(instantvector| sum without($bs,*) ($v)) =>
+    `(InstantVector.sum (m := PromQLMode.pure) (AggregationSelector.without [$bs,*]) ($v))
+| `(instantvector| sum ($v) without($bs,*)) =>
+    `(InstantVector.sum (m := PromQLMode.pure) (AggregationSelector.without [$bs,*]) ($v))
+| `(instantvector| topk($k, $v)) =>
+    `(InstantVector.topk (m := PromQLMode.pure) .none $k $v)
+
+syntax "[pql|" instantvector "]" : term
+
+macro_rules
+| `([pql| $v:instantvector]) => `($v)
+
+-- Grafana-templated PromQL syntax (`[tpql| ... ]`)
+-- Label values support both Grafana's `"$var"` syntax and `@var`.
+-- Key-value matchers (`@extra_filters`) and duration variables (`[@__rate_interval]`) use `@var`
+-- because `$ident` is reserved by Lean 4's macro antiquotation parser.
+
+declare_syntax_cat tlabelmatcher
+syntax name "=" strLit : tlabelmatcher
+syntax name "=" "@" name : tlabelmatcher
+syntax "@" name : tlabelmatcher
+
+macro_rules
+| `(tlabelmatcher| $key:name=$value:str) =>
+    let s := value.getString
+    if s.startsWith "$" then
+      `(LabelMatcher.equal (m := PromQLMode.templated) $(quote key.raw[0].getAtomVal) (TemplatedValue.var $(quote (s.drop 1))))
+    else
+      `(LabelMatcher.equal (m := PromQLMode.templated) $(quote key.raw[0].getAtomVal) (TemplatedValue.lit $value))
+| `(tlabelmatcher| $key:name=@$var:name) =>
+    `(LabelMatcher.equal (m := PromQLMode.templated) $(quote key.raw[0].getAtomVal) (TemplatedValue.var $(quote var.raw[0].getAtomVal)))
+| `(tlabelmatcher| @$var:name) =>
+    `(LabelMatcher.keyValueVar $(quote var.raw[0].getAtomVal))
+
+declare_syntax_cat tlabelmatchers
+syntax "{" tlabelmatcher,* "}" : tlabelmatchers
+macro_rules
+| `(tlabelmatchers| { $xs,* }) => `([$xs,*])
+
+declare_syntax_cat trangevector
+syntax name tlabelmatchers "[" numLit "]" : trangevector
+syntax name tlabelmatchers "[" "@" name "]" : trangevector
+
+macro_rules
+| `(trangevector| $name:name $xs:tlabelmatchers [ $range:num ]) =>
+    `(RangeVector.selector (m := PromQLMode.templated)
+        ((LabelMatcher.equal (m := PromQLMode.templated) name_label (TemplatedValue.lit $(quote name.raw[0].getAtomVal))) :: $(xs))
+        (TemplatedDuration.seconds $range))
+| `(trangevector| $name:name $xs:tlabelmatchers [ @$var:name ]) =>
+    `(RangeVector.selector (m := PromQLMode.templated)
+        ((LabelMatcher.equal (m := PromQLMode.templated) name_label (TemplatedValue.lit $(quote name.raw[0].getAtomVal))) :: $(xs))
+        (TemplatedDuration.var $(quote var.raw[0].getAtomVal)))
+
+declare_syntax_cat tinstantvector
+syntax name (tlabelmatchers)? : tinstantvector
+syntax "time()" : tinstantvector
+syntax "rate(" trangevector ")" : tinstantvector
+syntax "label_replace(" tinstantvector "," strLit "," strLit "," strLit "," strLit ")" : tinstantvector
+syntax tinstantvector " - " tinstantvector : tinstantvector
+syntax tinstantvector " + " tinstantvector : tinstantvector
+syntax "sum" "(" tinstantvector ")" : tinstantvector
+syntax "sum" "by" "(" labelref,* ")" "(" tinstantvector ")" : tinstantvector
+syntax "sum" "(" tinstantvector ")" "by" "(" labelref,* ")" : tinstantvector
+syntax "sum" "without" "(" labelref,* ")" "(" tinstantvector ")" : tinstantvector
+syntax "sum" "(" tinstantvector ")" "without" "(" labelref,* ")" : tinstantvector
+syntax "topk" "(" numLit "," tinstantvector ")" : tinstantvector
+
+macro_rules
+| `(tinstantvector| time()) => `(InstantVector.time (m := PromQLMode.templated))
+| `(tinstantvector| $name:name) =>
+    `(InstantVector.selector (m := PromQLMode.templated)
+        [LabelMatcher.equal (m := PromQLMode.templated) name_label (TemplatedValue.lit $(quote name.raw[0].getAtomVal))] 0)
+| `(tinstantvector| $name:name $xs:tlabelmatchers) =>
+    `(InstantVector.selector (m := PromQLMode.templated)
+        ((LabelMatcher.equal (m := PromQLMode.templated) name_label (TemplatedValue.lit $(quote name.raw[0].getAtomVal))) :: $(xs)) 0)
+| `(tinstantvector| $a - $b) => `(InstantVector.sub_vector (m := PromQLMode.templated) Option.none $a $b)
+| `(tinstantvector| $a + $b) => `(InstantVector.add_vector (m := PromQLMode.templated) Option.none $a $b)
+| `(tinstantvector| rate($rv)) => `(InstantVector.rate (m := PromQLMode.templated) $rv)
+| `(tinstantvector| label_replace($v, $dst, $repl, $src, $reg)) =>
+    `(InstantVector.label_replace (m := PromQLMode.templated) $v $dst $repl $src $reg)
+| `(tinstantvector| sum($v)) => `(InstantVector.sum (m := PromQLMode.templated) .none $v)
+| `(tinstantvector| sum by($bs,*) ($v)) =>
+    `(InstantVector.sum (m := PromQLMode.templated) (AggregationSelector.by [$bs,*]) ($v))
+| `(tinstantvector| sum ($v) by($bs,*)) =>
+    `(InstantVector.sum (m := PromQLMode.templated) (AggregationSelector.by [$bs,*]) ($v))
+| `(tinstantvector| sum without($bs,*) ($v)) =>
+    `(InstantVector.sum (m := PromQLMode.templated) (AggregationSelector.without [$bs,*]) ($v))
+| `(tinstantvector| sum ($v) without($bs,*)) =>
+    `(InstantVector.sum (m := PromQLMode.templated) (AggregationSelector.without [$bs,*]) ($v))
+| `(tinstantvector| topk($k, $v)) =>
+    `(InstantVector.topk (m := PromQLMode.templated) .none $k $v)
+
+syntax "[tpql|" tinstantvector "]" : term
+
+macro_rules
+| `([tpql| $v:tinstantvector]) => `($v)
+
+set_option pp.rawOnError true
+#eval [pql| up{}]
+#eval [pql| up{instance="localhost"}]
+#eval [pql| up - up]
+#eval [pql| up{test="abc", lan="def"}]
+#eval [pql| time()]
+#eval [pql| rate(up{}[7])]
+#eval [pql| label_replace(up, "new", "$1-xyz", "job", "(.*)")]
+#eval [pql| sum (up{})]
+#eval [pql| sum by(**instance) (up)]
+#eval [pql| sum (up) by(**instance)]
+#eval [pql| sum without (**instance) (up)]
+#eval [pql| sum (up) without (**instance)]
+#eval [tpql| rate(node_network_receive_bytes_total{device="$device", @extra_filters}[@__rate_interval])]
+
+def up_templated_with_job (job : String) : PureInstantVector .vector :=
+  InstantVector.selector [.equal name_label job] 0
+
+def bytes_receives_templated_with_rate_window (rate_window : Nat) : PureInstantVector .vector :=
+  InstantVector.rate $ RangeVector.selector [.equal name_label "node_network_receive_bytes_total"] rate_window
