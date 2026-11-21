@@ -42,7 +42,7 @@ def myDashboard : Dashboard myPrometheusEnv myVars := {
         title := "Network Receive Rate",
         targets := [
           { promql := { query := [tpql| rate(node_network_receive_bytes_total{instance="$instance"}[@__rate_interval]) ] }, legendFormat := some "{{device}} (by instance)" },
-          { promql := { query := [pql| rate(node_network_receive_bytes_total{device="eth0"}[120]) ] }, legendFormat := some "eth0 (120s)" }
+          { promql := { query := [pql| rate(node_network_receive_bytes_total{device="eth0"}[5m]) ] }, legendFormat := some "eth0 (5m)" }
         ]
       })
     ]
@@ -50,7 +50,7 @@ def myDashboard : Dashboard myPrometheusEnv myVars := {
     height := 6,
     panels := [
       (.graph (GraphPanel.single
-        { query := [pql| rate(node_network_receive_bytes_total{device="eth0"}[120]) ] }
+        { query := [pql| rate(node_network_receive_bytes_total{device="eth0"}[120s]) ] }
         (title := "eth0 Receive Rate"))),
       (.table {
         name := "Filesystem Summary",

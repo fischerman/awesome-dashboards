@@ -59,8 +59,8 @@ example : runValidators (defaultPureValidators myPrometheusEnv) (InstantVector.s
 def avail_bytes : PureInstantVector .vector := [pql| node_filesystem_avail_bytes - node_filesystem_avail_bytes]
 #eval unitOf myPrometheusEnv avail_bytes
 #eval unitOf myPrometheusEnv [pql| time()]
-#eval RangeVector.unitOf myPrometheusEnv $ RangeVector.selector (m := .pure) [.equal "__name__" "node_network_receive_bytes_total"] 5
-#eval unitOf myPrometheusEnv [pql| rate(node_network_receive_bytes_total{}[5])]
-#eval [pql| rate(node_network_receive_bytes_total{device="vda"}[120])]
+#eval RangeVector.unitOf myPrometheusEnv $ RangeVector.selector (m := .pure) [.equal "__name__" "node_network_receive_bytes_total"] (Duration.s 5)
+#eval unitOf myPrometheusEnv [pql| rate(node_network_receive_bytes_total{}[5s])]
+#eval [pql| rate(node_network_receive_bytes_total{device="vda"}[5m])]
 
 end x

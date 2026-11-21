@@ -243,8 +243,49 @@ inductive TemplatedValue
   | var (name : String)
   deriving Repr, BEq, DecidableEq, Lean.FromJson, Lean.ToJson
 
+inductive DurationUnit
+  | ms
+  | s
+  | m
+  | h
+  | d
+  | w
+  | y
+  deriving Repr, BEq, DecidableEq, Lean.FromJson, Lean.ToJson
+
+namespace DurationUnit
+
+  def toString : DurationUnit → String
+    | .ms => "ms"
+    | .s  => "s"
+    | .m  => "m"
+    | .h  => "h"
+    | .d  => "d"
+    | .w  => "w"
+    | .y  => "y"
+
+end DurationUnit
+
+structure Duration where
+  value : Nat
+  unit : DurationUnit
+  deriving Repr, BEq, DecidableEq, Lean.FromJson, Lean.ToJson
+
+namespace Duration
+
+  def toString (d : Duration) : String := s!"{d.value}{d.unit.toString}"
+  def ms (n : Nat) : Duration := { value := n, unit := .ms }
+  def s  (n : Nat) : Duration := { value := n, unit := .s }
+  def m  (n : Nat) : Duration := { value := n, unit := .m }
+  def h  (n : Nat) : Duration := { value := n, unit := .h }
+  def d  (n : Nat) : Duration := { value := n, unit := .d }
+  def w  (n : Nat) : Duration := { value := n, unit := .w }
+  def y  (n : Nat) : Duration := { value := n, unit := .y }
+
+end Duration
+
 inductive TemplatedDuration
-  | seconds (n : Nat)
+  | lit (d : Duration)
   | var (name : String)
   deriving Repr, BEq, DecidableEq, Lean.FromJson, Lean.ToJson
 
@@ -253,7 +294,7 @@ abbrev LabelMatcherValue : PromQLMode → Type
   | .templated => TemplatedValue
 
 abbrev RangeDuration : PromQLMode → Type
-  | .pure      => Nat
+  | .pure      => Duration
   | .templated => TemplatedDuration
 
 def LabelMatcherValue.toString : {m : PromQLMode} → LabelMatcherValue m → String
@@ -267,8 +308,8 @@ def LabelMatcherValue.asLiteral? : {m : PromQLMode} → LabelMatcherValue m → 
   | .templated, .var _ => .none
 
 def RangeDuration.toString : {m : PromQLMode} → RangeDuration m → String
-  | .pure, d => s!"{d}s"
-  | .templated, .seconds d => s!"{d}s"
+  | .pure, d => Duration.toString d
+  | .templated, .lit d => Duration.toString d
   | .templated, .var name => "$" ++ name
 
 inductive MatchOp
@@ -354,7 +395,7 @@ namespace RangeVector
         metricName ++ "{" ++ rest ++ "}[" ++ RangeDuration.toString d ++ "]"
 
   def toTemplated : RangeVector .pure → RangeVector .templated
-    | .selector lms d => .selector (lms.map LabelMatcher.toTemplated) (.seconds d)
+    | .selector lms d => .selector (lms.map LabelMatcher.toTemplated) (.lit d)
 
 end RangeVector
 
@@ -444,7 +485,7 @@ instance {m : PromQLMode} {t : InstantVectorType} : Lean.ToJson (InstantVector m
 /-- Concrete runtime values for Grafana template variables. -/
 structure VarAssignment where
   labelValues   : String → Option String := fun _ => .none
-  durations     : String → Option Nat := fun _ => .none
+  durations     : String → Option Duration := fun _ => .none
   keyValuePairs : String → Option (List (LabelMatcher .pure)) := fun _ => .none
 
 def LabelMatcher.instantiate (env : VarAssignment) : LabelMatcher .templated → Option (List (LabelMatcher .pure))
@@ -461,7 +502,7 @@ def RangeVector.instantiate (env : VarAssignment) : RangeVector .templated → O
   | .selector lms d => do
       let lms' ← instantiateMatchers env lms
       let d' ← match d with
-        | .seconds n => .some n
+        | .lit dur => .some dur
         | .var name => env.durations name
       return .selector lms' d'
 
@@ -557,7 +598,7 @@ namespace InstantVector
         | .keyValueVar name => (name, .key_value_pairs) :: matchersUsedVars xs
 
   private def rangeUsedVars : RangeVector .templated → Vars
-    | .selector lms (.seconds _) => matchersUsedVars lms
+    | .selector lms (.lit _) => matchersUsedVars lms
     | .selector lms (.var name) => matchersUsedVars lms ++ [(name, .duration)]
 
   /-- Extracts all template variables referenced in a templated query. -/
@@ -662,7 +703,7 @@ def validateMatchersVars (vars : Vars) : List (LabelMatcher .templated) → Exce
           validateMatchersVars vars xs
 
 def validateRangeVars (vars : Vars) : RangeVector .templated → Except ValidationError Unit
-  | .selector lms (.seconds _) => validateMatchersVars vars lms
+  | .selector lms (.lit _) => validateMatchersVars vars lms
   | .selector lms (.var name) => do
       validateMatchersVars vars lms
       validateVarBinding vars name .duration
@@ -785,6 +826,36 @@ def name : Parser := withAntiquot (mkAntiquot "name" `LX.text) {
 @[combinator_formatter name] def name.formatter : Formatter := pure ()
 @[combinator_parenthesizer name] def name.parenthesizer : Parenthesizer := pure ()
 
+def durationLit : Parser := withAntiquot (mkAntiquot "durationLit" `LX.duration) {
+  fn := fun c s =>
+    let startPos := s.pos
+    let s := takeWhile1Fn Char.isDigit "expected duration digits" c s
+    if s.hasError then s
+    else
+      let s := takeWhile1Fn Char.isAlpha "expected duration unit (ms, s, m, h, d, w, y)" c s
+      mkNodeToken `LX.duration startPos c s
+}
+
+@[combinator_formatter durationLit] def durationLit.formatter : Formatter := pure ()
+@[combinator_parenthesizer durationLit] def durationLit.parenthesizer : Parenthesizer := pure ()
+
+def expandDurationLit (stx : TSyntax `durationLit) : MacroM (TSyntax `term) := do
+  let raw := stx.raw[0].getAtomVal
+  let digits := raw.takeWhile Char.isDigit
+  let unitStr := raw.dropWhile Char.isDigit
+  let some n := digits.toNat?
+    | Macro.throwErrorAt stx s!"invalid duration number '{digits}'"
+  let unitTerm ← match unitStr with
+    | "ms" => `(DurationUnit.ms)
+    | "s"  => `(DurationUnit.s)
+    | "m"  => `(DurationUnit.m)
+    | "h"  => `(DurationUnit.h)
+    | "d"  => `(DurationUnit.d)
+    | "w"  => `(DurationUnit.w)
+    | "y"  => `(DurationUnit.y)
+    | _    => Macro.throwErrorAt stx s!"invalid duration unit '{unitStr}', expected one of ms, s, m, h, d, w, y"
+  `(Duration.mk $(quote n) $unitTerm)
+
 declare_syntax_cat matchop
 syntax "="  : matchop
 syntax "!=" : matchop
@@ -814,12 +885,18 @@ macro_rules
 | `(labelmatchers| { $xs,* }) => `([$xs,*])
 
 declare_syntax_cat rangevector
-syntax name (labelmatchers) "[" numLit "]" : rangevector
+syntax name (labelmatchers)? "[" durationLit "]" : rangevector
 macro_rules
-| `(rangevector| $name:name $xs [ $range ]) =>
+| `(rangevector| $name:name [ $dur:durationLit ]) => do
+    let durTerm ← expandDurationLit dur
+    `(RangeVector.selector (m := PromQLMode.pure)
+        [LabelMatcher.equal (m := PromQLMode.pure) name_label $(quote name.raw[0].getAtomVal)]
+        $durTerm)
+| `(rangevector| $name:name $xs:labelmatchers [ $dur:durationLit ]) => do
+    let durTerm ← expandDurationLit dur
     `(RangeVector.selector (m := PromQLMode.pure)
         ((LabelMatcher.equal (m := PromQLMode.pure) name_label $(quote name.raw[0].getAtomVal)) :: $(xs))
-        $range)
+        $durTerm)
 
 -- Used in places where a list of labels is required, e.g. by-clause.
 declare_syntax_cat labelref
@@ -903,14 +980,24 @@ macro_rules
 | `(tlabelmatchers| { $xs,* }) => `([$xs,*])
 
 declare_syntax_cat trangevector
-syntax name tlabelmatchers "[" numLit "]" : trangevector
-syntax name tlabelmatchers "[" "@" name "]" : trangevector
+syntax name (tlabelmatchers)? "[" durationLit "]" : trangevector
+syntax name (tlabelmatchers)? "[" "@" name "]" : trangevector
 
 macro_rules
-| `(trangevector| $name:name $xs:tlabelmatchers [ $range:num ]) =>
+| `(trangevector| $name:name [ $dur:durationLit ]) => do
+    let durTerm ← expandDurationLit dur
+    `(RangeVector.selector (m := PromQLMode.templated)
+        [LabelMatcher.equal (m := PromQLMode.templated) name_label (TemplatedValue.lit $(quote name.raw[0].getAtomVal))]
+        (TemplatedDuration.lit $durTerm))
+| `(trangevector| $name:name $xs:tlabelmatchers [ $dur:durationLit ]) => do
+    let durTerm ← expandDurationLit dur
     `(RangeVector.selector (m := PromQLMode.templated)
         ((LabelMatcher.equal (m := PromQLMode.templated) name_label (TemplatedValue.lit $(quote name.raw[0].getAtomVal))) :: $(xs))
-        (TemplatedDuration.seconds $range))
+        (TemplatedDuration.lit $durTerm))
+| `(trangevector| $name:name [ @$var:name ]) =>
+    `(RangeVector.selector (m := PromQLMode.templated)
+        [LabelMatcher.equal (m := PromQLMode.templated) name_label (TemplatedValue.lit $(quote name.raw[0].getAtomVal))]
+        (TemplatedDuration.var $(quote var.raw[0].getAtomVal)))
 | `(trangevector| $name:name $xs:tlabelmatchers [ @$var:name ]) =>
     `(RangeVector.selector (m := PromQLMode.templated)
         ((LabelMatcher.equal (m := PromQLMode.templated) name_label (TemplatedValue.lit $(quote name.raw[0].getAtomVal))) :: $(xs))
@@ -966,7 +1053,8 @@ set_option pp.rawOnError true
 #eval [pql| up - up]
 #eval [pql| up{test="abc", lan="def"}]
 #eval [pql| time()]
-#eval [pql| rate(up{}[7])]
+#eval [pql| rate(up{}[7s])]
+#eval [pql| rate(up[5m])]
 #eval [pql| label_replace(up, "new", "$1-xyz", "job", "(.*)")]
 #eval [pql| sum (up{})]
 #eval [pql| sum by(**instance) (up)]
@@ -978,5 +1066,5 @@ set_option pp.rawOnError true
 def up_templated_with_job (job : String) : PureInstantVector .vector :=
   InstantVector.selector [.equal name_label job] 0
 
-def bytes_receives_templated_with_rate_window (rate_window : Nat) : PureInstantVector .vector :=
+def bytes_receives_templated_with_rate_window (rate_window : Duration) : PureInstantVector .vector :=
   InstantVector.rate $ RangeVector.selector [.equal name_label "node_network_receive_bytes_total"] rate_window
